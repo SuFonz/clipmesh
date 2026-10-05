@@ -3,22 +3,38 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "workspaces": [
+    "packages/ui-core",
+    "apps/desktop",
+    "apps/desktop/ui",
+    "apps/android",
+    "apps/android/ui"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "dev:desktop": "npm --prefix apps/desktop run dev",
+    "build:desktop": "npm --prefix apps/desktop run build",
+    "dev:desktop:ui": "npm --prefix apps/desktop/ui run dev",
+    "build:desktop:ui": "npm --prefix apps/desktop/ui run build",
+    "dev:android": "npm --prefix apps/android run dev",
+    "build:android": "npm --prefix apps/android run build",
+    "dev:android:ui": "npm --prefix apps/android/ui run dev",
+    "build:android:ui": "npm --prefix apps/android/ui run build",
+    "build": "npm --prefix apps/desktop/ui run build && npm --prefix apps/android/ui run build",
+    "typecheck": "npm --prefix apps/desktop/ui run typecheck && npm --prefix apps/android/ui run typecheck",
+    "icons": "node scripts/update-icons.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
-    "vue": "^3.5.13",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "pinia": "^3.0.3",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
-    "vue-tsc": "^3.3.5",
-    "@tauri-apps/cli": "^2"
+    "vue-tsc": "^3.3.5"
   }
 }

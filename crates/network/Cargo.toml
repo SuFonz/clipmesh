@@ -1,0 +1,32 @@
+[package]
+name = "clipmesh-network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ClipMesh networking: mDNS discovery, TCP transport and mutually authenticated TLS sessions"
+
+[dependencies]
+clipmesh-protocol.workspace = true
+clipmesh-identity.workspace = true
+clipmesh-security.workspace = true
+clipmesh-core.workspace = true
+
+mdns-sd.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = "3"

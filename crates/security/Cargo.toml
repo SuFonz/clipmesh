@@ -1,0 +1,30 @@
+[package]
+name = "clipmesh-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ClipMesh transport security: mutually authenticated TLS 1.3, certificate policy and channel-bound identity handshake"
+
+[dependencies]
+clipmesh-protocol.workspace = true
+clipmesh-identity.workspace = true
+
+rustls.workspace = true
+rustls-pki-types.workspace = true
+x509-parser.workspace = true
+sha2.workspace = true
+rand.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+hex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Used by the crate level example, which builds a live trust store.
+parking_lot.workspace = true

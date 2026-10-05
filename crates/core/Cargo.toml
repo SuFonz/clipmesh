@@ -1,0 +1,27 @@
+[package]
+name = "clipmesh-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform independent ClipMesh sync engine: providers, deduplication and device management"
+
+[dependencies]
+clipmesh-protocol.workspace = true
+clipmesh-identity.workspace = true
+clipmesh-security.workspace = true
+
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = "3"

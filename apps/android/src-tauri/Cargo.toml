@@ -1,0 +1,36 @@
+[package]
+name = "clipmesh-android"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ClipMesh for Android: Tauri mobile host and the Kotlin foreground service bridge"
+authors = ["ClipMesh contributors"]
+
+[lib]
+name = "clipmesh_android_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The desktop crate is the shared Tauri host: state assembly, the whole IPC
+# command layer and event forwarding live there. `default-features = false` drops
+# the tray, which cannot build for Android.
+clipmesh-desktop = { path = "../../desktop/src-tauri", default-features = false }
+
+clipmesh-protocol.workspace = true
+clipmesh-identity.workspace = true
+clipmesh-core.workspace = true
+clipmesh-clipboard.workspace = true
+
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+base64.workspace = true

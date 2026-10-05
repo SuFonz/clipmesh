@@ -1,3 +1,29 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules
+dist
+dist-ssr
+*.local
+
+# Tauri generates these next to the app; they are per machine.
+**/src-tauri/gen/schemas
+
+# Android build output. `gen/android` itself IS tracked: it is what
+# `tauri android init` produces and it carries the two hand-written wiring lines
+# described in docs/BUILD.md.
+**/src-tauri/gen/android/.gradle
+**/src-tauri/gen/android/build
+**/src-tauri/gen/android/app/build
+**/src-tauri/gen/android/local.properties
+**/src-tauri/gen/android/.idea
+**/src-tauri/gen/android/app/src/main/jniLibs
+# Any Android library module under apps/*/plugins/ (currently just `bridge`).
+**/plugins/*/build
+**/plugins/*/.gradle
+
 # Logs
 logs
 *.log
@@ -5,12 +31,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*

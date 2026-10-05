@@ -1,0 +1,9 @@
+include ':app'
+
+// ClipMesh's own Android plugin. It lives outside the generated project so that
+// re-running `tauri android init` cannot overwrite it. `rootDir` here is
+// apps/android/src-tauri/gen/android, so `../../..` is apps/android.
+include ':bridge'
+project(':bridge').projectDir = new File(rootDir, '../../../plugins/bridge')
+
+apply from: 'tauri.settings.gradle'
