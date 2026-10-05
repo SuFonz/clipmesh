@@ -19,6 +19,14 @@ pub enum SetupError {
     /// The engine could not be assembled.
     #[error(transparent)]
     Core(#[from] clipmesh_core::CoreError),
+
+    /// The platform would not give us a directory to keep state in.
+    ///
+    /// Reachable on Android: [`IdentityPaths::discover`] goes through
+    /// `dirs::config_dir()`, which has no fallback there. The Android host asks
+    /// Tauri's path plugin instead and reports the failure through this.
+    #[error("could not resolve a state directory: {0}")]
+    Paths(String),
 }
 
 /// The live application.
@@ -38,7 +46,23 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Load everything from disk and wire the providers together.
+    /// Load everything from disk and wire the providers together, keeping state
+    /// in the platform config directory.
+    ///
+    /// # Errors
+    /// Returns [`SetupError::Identity`] when the platform reports no config
+    /// directory - which is what happens on Android, where the host resolves its
+    /// own directory and calls [`AppState::build_in`] instead. See
+    /// [`AppState::build_in`] for everything else that can fail.
+    pub fn build_with<F>(clipboard: F) -> Result<Self, SetupError>
+    where
+        F: FnOnce(DeviceId) -> Arc<dyn ClipmeshClipboardProvider>,
+    {
+        Self::build_in(IdentityPaths::discover()?, clipboard)
+    }
+
+    /// Load everything from disk and wire the providers together, keeping state
+    /// in `paths`.
     ///
     /// `clipboard` is a factory rather than a value because a clipboard
     /// provider needs this device's id - and the id comes from the identity,
@@ -51,11 +75,10 @@ impl AppState {
     /// Returns [`SetupError`] when keys, the trust store or the engine cannot
     /// be created. A corrupt trust store is deliberately fatal rather than
     /// silently replaced - see [`TrustStore::load`].
-    pub fn build_with<F>(clipboard: F) -> Result<Self, SetupError>
+    pub fn build_in<F>(paths: IdentityPaths, clipboard: F) -> Result<Self, SetupError>
     where
         F: FnOnce(DeviceId) -> Arc<dyn ClipmeshClipboardProvider>,
     {
-        let paths = IdentityPaths::discover()?;
         paths.ensure_dir()?;
 
         let identity = Arc::new(DeviceIdentity::load_or_create(

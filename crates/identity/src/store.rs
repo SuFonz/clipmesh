@@ -35,13 +35,20 @@ pub struct IdentityPaths {
 
 impl IdentityPaths {
     /// Use the platform config directory:
-    /// `%APPDATA%\ClipMesh` on Windows, `~/.config/ClipMesh` on Linux,
-    /// `~/Library/Application Support/ClipMesh` on macOS, and the app's private
-    /// data dir on Android.
+    /// `%APPDATA%\ClipMesh` on Windows, `~/.config/ClipMesh` on Linux and
+    /// `~/Library/Application Support/ClipMesh` on macOS.
+    ///
+    /// **Android has no such directory.** `dirs::config_dir()` returns `None`
+    /// there, because `dirs-sys` gives `home_dir` no fallback on that target
+    /// (`#[cfg(target_os = "android")] fn fallback() -> Option<OsString> { None }`),
+    /// unlike desktop Linux, which falls back to `getpwuid_r`. The Android host
+    /// resolves a writable directory through Tauri's path plugin and calls
+    /// [`IdentityPaths::at`]; reaching this function on Android is a bug, not a
+    /// supported fallback.
     ///
     /// # Errors
-    /// Returns [`IdentityError::TrustStore`] when the platform has no config
-    /// directory, which means the process environment is broken.
+    /// Returns [`IdentityError::TrustStore`] when the platform reports no config
+    /// directory - expected on Android, a broken environment anywhere else.
     pub fn discover() -> Result<Self> {
         let base = dirs::config_dir().ok_or_else(|| {
             IdentityError::TrustStore(

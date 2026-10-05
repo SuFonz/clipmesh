@@ -29,7 +29,8 @@ use tauri::{Manager as _, Wry};
 
 use clipmesh_clipboard::AndroidClipboardProvider;
 use clipmesh_core::SharedSyncManager;
-use clipmesh_desktop_lib::state::AppState;
+use clipmesh_desktop_lib::state::{AppState, SetupError};
+use clipmesh_identity::IdentityPaths;
 
 use crate::clipboard_host::KotlinClipboardHost;
 use crate::plugin::NativeBridge;
@@ -67,7 +68,7 @@ pub fn run() {
             // result is captured here for the commands to use.
             let slot: Arc<OnceLock<Arc<AndroidClipboardProvider>>> = Arc::new(OnceLock::new());
 
-            let state = AppState::build_with({
+            let state = AppState::build_in(state_paths(&handle)?, {
                 let slot = Arc::clone(&slot);
                 let host: Arc<dyn clipmesh_clipboard::AndroidClipboardHost> = host;
                 move |device_id| {
@@ -133,4 +134,33 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("could not start ClipMesh on Android");
+}
+
+/// Where the Android build keeps its keys, trust store and settings.
+///
+/// [`AppState::build_with`] cannot be used here. It resolves the state directory
+/// with [`IdentityPaths::discover`], which goes through `dirs::config_dir()`, and
+/// `dirs-sys` reports `None` on Android: its `home_dir` has no fallback there
+/// (`#[cfg(target_os = "android")] fn fallback() -> Option<OsString> { None }`),
+/// unlike desktop Linux, which falls back to `getpwuid_r`.
+///
+/// The failure used to surface as an immediate crash on launch with nothing in
+/// the log, because a setup error makes `run()` return `Err`, `.expect` turns
+/// that into a panic, and `[profile.release]` sets `panic = "abort"`.
+///
+/// Tauri installs its own `path` plugin into every app
+/// (`App::register_core_plugins`), and on Android that plugin's `getConfigDir`
+/// answers `Context.getDataDir()`. `app_config_dir` appends the bundle
+/// identifier, so this resolves to
+/// `/data/user/0/app.cm.clipmesh/app.cm.clipmesh` - private to the app and
+/// writable without any runtime permission.
+fn state_paths<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<IdentityPaths, SetupError> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| SetupError::Paths(error.to_string()))?;
+
+    tracing::info!(dir = %dir.display(), "resolved the Android state directory");
+
+    Ok(IdentityPaths::at(dir))
 }
