@@ -38,7 +38,7 @@ use tokio::sync::broadcast;
 use clipmesh_identity::{DeviceIdentity, TrustStore, TrustedDevice};
 use clipmesh_protocol::{
     now_millis, ClipboardContent, ClipboardItem, DeviceId, Envelope, ImageChunk, ImageMeta,
-    ImagePayload, Payload, Platform, TextPayload, IMAGE_CHUNK_BYTES,
+    ImagePayload, MessageKind, Payload, Platform, TextPayload, IMAGE_CHUNK_BYTES,
 };
 use clipmesh_security::{build_pair_accept, random_challenge, verify_pair_accept};
 
@@ -65,6 +65,23 @@ const PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120)
 
 /// How long a partially received image is kept before it is dropped.
 const IMAGE_ASSEMBLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How often the engine re-checks that it is connected to the trusted devices it
+/// can see, and drops expired pairing attempts.
+///
+/// Five seconds is short enough that a peer which restarts is back before the
+/// user notices, and long enough that a dial which is slow to fail cannot pile
+/// up. See [`SyncManager::reconcile`].
+const RECONCILE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Every how many reconcile ticks the *larger* device id also dials.
+///
+/// See [`SyncManager::reconcile`]: the tie-break normally lets only the smaller
+/// id dial, and this is the fallback for when the other end never gets a fresh
+/// discovery event. Six ticks is thirty seconds, by which point the smaller side
+/// has had six chances - if any of them worked we are already connected and this
+/// never fires.
+const BACKUP_DIAL_EVERY: u64 = 6;
 
 /// Everything the engine needs, injected by the platform layer.
 pub struct SyncManagerOptions {
@@ -199,6 +216,9 @@ impl SyncManager {
 
         let clipboard_tasks = Arc::clone(self);
         tokio::spawn(async move { clipboard_tasks.clipboard_loop().await });
+
+        let maintenance = Arc::clone(self);
+        tokio::spawn(async move { maintenance.reconcile_loop().await });
     }
 
     /// Open the network: advertise over mDNS and accept connections.
@@ -208,12 +228,22 @@ impl SyncManager {
     /// # Errors
     /// Returns [`CoreError::Network`] when discovery or the listener fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
-        if self.is_running() {
+        // Claim the flag *before* opening the network, and do it atomically so
+        // two concurrent callers cannot both get through.
+        //
+        // The order matters: `maybe_connect` refuses to dial anything while this
+        // is false, so flipping it afterwards meant a discovery event that
+        // landed during `network.start()` was dropped - and nothing retried it.
+        if self.running.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
 
-        self.network.start().await?;
-        self.running.store(true, Ordering::Relaxed);
+        if let Err(error) = self.network.start().await {
+            // Roll the flag back so a retry is possible.
+            self.running.store(false, Ordering::Relaxed);
+            return Err(error.into());
+        }
+
         tracing::info!(device = %self.identity.device_id(), "clipmesh engine started");
         self.emit_status();
         Ok(())
@@ -255,6 +285,84 @@ impl SyncManager {
             self.handle_network_event(event).await;
         }
         tracing::warn!("the network event stream ended; the engine is now deaf");
+    }
+
+    /// Keep the session set honest, and expire stale pairing attempts.
+    ///
+    /// mDNS used to be the only thing that ever triggered a dial, and that is not
+    /// enough: a peer which restarts while we are already running does not
+    /// necessarily produce a fresh `ServiceResolved` here, because when the
+    /// advertised record is unchanged mdns-sd has nothing new to report. The
+    /// device then stayed offline - with the dial tie-break meaning we would not
+    /// even try, if we happen to have the larger id - until the user restarted
+    /// the engine by hand, which builds a new daemon and therefore does produce
+    /// events.
+    ///
+    /// This closes that hole: whatever the reason a session went away, it comes
+    /// back within one tick.
+    async fn reconcile_loop(self: Arc<Self>) {
+        let mut ticker = tokio::time::interval(RECONCILE_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick completes immediately, i.e. before the engine has been
+        // started and before there is anything to reconcile.
+        ticker.tick().await;
+
+        let mut tick: u64 = 0;
+        loop {
+            ticker.tick().await;
+            tick = tick.wrapping_add(1);
+            self.reconcile(tick);
+            // `prune_expired` documents itself as being driven from here; until
+            // this loop existed nothing called it at all.
+            self.prune_expired();
+        }
+    }
+
+    /// Re-dial every trusted peer we can see but are not connected to.
+    ///
+    /// [`SyncManager::maybe_connect`] applies the dial tie-break, which on its own
+    /// is not enough to get back online. The tie-break assumes the other end will
+    /// notice us, and it may not: a peer that restarts while we are already
+    /// running does not necessarily produce a fresh `ServiceResolved` here,
+    /// because when its advertised record is unchanged mdns-sd has nothing new to
+    /// report. The device then sat there offline until the engine was restarted by
+    /// hand - that builds a new daemon, which unregisters and re-registers, and
+    /// *that* finally looks like news to the other side.
+    ///
+    /// So the smaller id keeps dialling every tick, and the larger id dials every
+    /// [`BACKUP_DIAL_EVERY`] ticks. The offset is what keeps this from breaking
+    /// the tie-break: by the time the larger id acts, the smaller one has had
+    /// several chances, and a successful dial shows up as `connected` here.
+    fn reconcile(self: &Arc<Self>, tick: u64) {
+        if !self.is_running() {
+            return;
+        }
+
+        // Peers we are supposed to be talking to. Lock order matches `peers()`:
+        // the trust store first, then the registry.
+        let candidates: Vec<DeviceId> = {
+            let trust = self.trust.read();
+            self.registry
+                .lock()
+                .views(|device| trust.is_trusted(device))
+                .into_iter()
+                .filter(|view| view.trusted && !view.connected)
+                .map(|view| view.device_id)
+                .collect()
+        };
+
+        let backup_tick = tick % BACKUP_DIAL_EVERY == 0;
+
+        for device in candidates {
+            if self.identity.device_id() >= device && !backup_tick {
+                continue;
+            }
+
+            let peer = { self.registry.lock().peer_of(device) };
+            if let Some(peer) = peer {
+                self.dial(&peer);
+            }
+        }
     }
 
     async fn clipboard_loop(self: Arc<Self>) {
@@ -698,10 +806,25 @@ impl SyncManager {
     /// Untrusted peers are never dialled here - that only happens when the user
     /// asks to pair.
     fn maybe_connect(self: &Arc<Self>, peer: &PeerAddress) {
+        // The tie-break: on first sight only the smaller id dials, so two devices
+        // that notice each other at the same moment do not open two connections.
+        // The larger id is not stranded by this - see `reconcile`.
+        if self.identity.device_id() >= peer.device_id {
+            return;
+        }
+
+        self.dial(peer);
+    }
+
+    /// Dial a trusted peer unless we are already talking to it.
+    ///
+    /// Unlike [`SyncManager::maybe_connect`] this does not apply the dial
+    /// tie-break, which is what lets [`SyncManager::reconcile`] act as a backstop
+    /// once the smaller id has had its chances.
+    fn dial(self: &Arc<Self>, peer: &PeerAddress) {
         if !self.is_running()
             || !self.is_trusted(peer.device_id)
             || self.network.is_connected(peer.device_id)
-            || self.identity.device_id() >= peer.device_id
         {
             return;
         }
@@ -711,7 +834,8 @@ impl SyncManager {
         tokio::spawn(async move {
             if let Err(error) = this.network.connect(&peer).await {
                 // A peer that just went away is normal; anything else will be
-                // retried on its next mDNS announcement.
+                // retried on its next mDNS announcement or on the next
+                // reconcile tick.
                 tracing::debug!(device = %peer.device_id, %error, "could not connect to a trusted peer");
             }
         });
@@ -794,10 +918,12 @@ impl SyncManager {
         let kind = envelope.ensure_valid()?;
         let trusted = self.is_trusted(device_id);
 
-        // An untrusted peer gets exactly one thing: the right to ask to pair.
-        // Everything else is dropped, which is what stops a stranger on the
-        // network from pushing content onto our clipboard.
-        if !trusted && !matches!(kind, clipmesh_protocol::MessageKind::PairRequest) {
+        // An untrusted peer may ask to pair, and may answer a request we made
+        // ourselves. See `may_handle_from_untrusted` for why the second case has
+        // to be let through.
+        if !trusted
+            && !may_handle_from_untrusted(kind, self.outgoing.lock().contains_key(&device_id))
+        {
             tracing::debug!(%device_id, %kind, "ignored a message from an untrusted device");
             return Ok(());
         }
@@ -1192,8 +1318,9 @@ impl SyncManager {
 
     /// Drop expired pairing attempts and half-received images.
     ///
-    /// Called from the network loop's idle path; exposed so the platform layer
-    /// can also drive it from a timer when the network is quiet.
+    /// Driven by [`SyncManager::reconcile_loop`]. It used to claim it was called
+    /// from "the network loop's idle path", which does not exist - so this was
+    /// dead code until the reconcile loop started calling it.
     pub fn prune_expired(&self) {
         let now = Instant::now();
 
@@ -1208,6 +1335,11 @@ impl SyncManager {
             self.outgoing.lock().remove(&device);
             self.registry.lock().resolve_prompt(device);
             self.emit_pairing_requests();
+            // Tell the user. Without this the prompt simply disappears after two
+            // minutes and nobody learns that the request was never answered.
+            self.report(
+                CoreError::Timeout("the other device to answer the pairing request").to_string(),
+            );
         }
 
         self.incoming_images
@@ -1219,6 +1351,37 @@ impl SyncManager {
             self.emit_peers();
             self.emit_status();
         }
+    }
+}
+
+/// Whether a message may be handled while the sender is still untrusted.
+///
+/// Exactly two things qualify:
+///
+/// * [`MessageKind::PairRequest`] - anyone may ask to pair; the user decides.
+/// * [`MessageKind::PairAccept`] - but only while *we* have a request of our own
+///   outstanding, because that is what it answers.
+///
+/// The second case is the subtle one. Pairing is mutually untrusted: when the
+/// answer comes back, neither side has trusted the other yet. A plain
+/// "the sender must be trusted" rule therefore drops the answer to our own
+/// request, which is exactly what used to happen - a rejection looked like it had
+/// never been sent, and the prompt sat there for the whole [`PAIRING_TIMEOUT`]
+/// before vanishing without a word.
+///
+/// Letting one through is still safe, for two independent reasons:
+/// [`SyncManager::handle_pair_accept`] ignores anything without a matching entry
+/// in `outgoing`, and a positive answer carries an Ed25519 signature over the
+/// nonce we generated, which a stranger cannot forge.
+///
+/// Everything else stays dropped, which is what stops a stranger on the network
+/// from pushing content onto our clipboard.
+#[must_use]
+fn may_handle_from_untrusted(kind: MessageKind, has_outgoing_request: bool) -> bool {
+    match kind {
+        MessageKind::PairRequest => true,
+        MessageKind::PairAccept => has_outgoing_request,
+        _ => false,
     }
 }
 
@@ -1235,3 +1398,44 @@ impl std::fmt::Debug for SyncManager {
 
 /// Convenience alias for the shared engine handle.
 pub type SharedSyncManager = Arc<SyncManager>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_untrusted_peer_may_only_ask_to_pair_and_answer_our_own_request() {
+        // Anyone may ask to pair; the user is the one who decides.
+        assert!(may_handle_from_untrusted(MessageKind::PairRequest, false));
+        assert!(may_handle_from_untrusted(MessageKind::PairRequest, true));
+
+        // The answer to our own request has to get through even though neither
+        // side trusts the other yet. Dropping it is what left a declined
+        // pairing with no feedback on the requesting device.
+        assert!(may_handle_from_untrusted(MessageKind::PairAccept, true));
+
+        // ...but an unsolicited one is still ignored.
+        assert!(!may_handle_from_untrusted(MessageKind::PairAccept, false));
+    }
+
+    #[test]
+    fn nothing_else_crosses_the_trust_boundary() {
+        // `has_outgoing_request` must not open the door for anything else: an
+        // outstanding pairing request is not a reason to accept clipboard
+        // traffic from a device the user never trusted.
+        for kind in [
+            MessageKind::Hello,
+            MessageKind::HelloAck,
+            MessageKind::ClipboardText,
+            MessageKind::ClipboardImage,
+            MessageKind::ImageChunk,
+            MessageKind::Ack,
+            MessageKind::Error,
+            MessageKind::Ping,
+            MessageKind::Pong,
+        ] {
+            assert!(!may_handle_from_untrusted(kind, false), "{kind:?}");
+            assert!(!may_handle_from_untrusted(kind, true), "{kind:?}");
+        }
+    }
+}

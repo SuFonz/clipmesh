@@ -29,6 +29,7 @@ use std::time::Duration;
 use tokio::io::{AsyncWriteExt as _, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 use tokio_rustls::TlsStream;
 
 use clipmesh_core::{NetworkEvent, PeerSession};
@@ -230,6 +231,14 @@ pub struct SessionHandle {
     pub peer: PeerSession,
     /// Queue an envelope for delivery. Dropping the handle closes the session.
     pub outbound: mpsc::Sender<Envelope>,
+    /// The task running the write half.
+    ///
+    /// A handle can outlive its socket: a session that ends on its own - the peer
+    /// was killed, or its process restarted - leaves the entry behind, because
+    /// nothing but `disconnect` and `shutdown` ever removes one. Keeping the task
+    /// around gives the service a way to tell "still talking" from "long gone",
+    /// so `is_connected` stops claiming a peer that is not there.
+    pub(crate) writer: JoinHandle<()>,
 }
 
 /// Spawn the read and write loops for a session.
@@ -248,7 +257,7 @@ pub fn run(
     let (reader, writer) = tokio::io::split(stream);
     let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
 
-    tokio::spawn(write_loop(writer, outbound_rx, device_id, events.clone()));
+    let writer = tokio::spawn(write_loop(writer, outbound_rx, device_id, events.clone()));
     tokio::spawn(read_loop(
         reader,
         outbound.clone(),
@@ -259,9 +268,9 @@ pub fn run(
     SessionHandle {
         peer: session_info,
         outbound,
+        writer,
     }
 }
-
 async fn write_loop(
     mut writer: WriteHalf<SessionStream>,
     mut queue: mpsc::Receiver<Envelope>,

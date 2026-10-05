@@ -191,8 +191,13 @@ impl DeviceRegistry {
         let pairing_ttl = self.pairing_ttl;
 
         let before = self.peers.len() + self.prompts.len();
-        self.peers
-            .retain(|_, entry| now.duration_since(entry.last_seen) < peer_ttl);
+        self.peers.retain(|_, entry| {
+            // A peer we hold a session with is not stale, however long ago it was
+            // last announced. mDNS only re-announces periodically, so judging a
+            // live connection by `last_seen` alone would make connected devices
+            // vanish from the list.
+            entry.connected || now.duration_since(entry.last_seen) < peer_ttl
+        });
         self.prompts
             .retain(|_, pending| now.duration_since(pending.raised_at) < pairing_ttl);
         self.peers.len() + self.prompts.len() != before

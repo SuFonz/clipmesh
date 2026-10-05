@@ -1,58 +1,59 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 
 import {
   AppButton,
   AppCard,
-  AppToggle,
-  ClipboardItemCard,
+  AppIcon,
   DeviceCard,
   EmptyState,
+  FingerprintBadge,
   StatusPill,
-  androidApi,
+  copyToClipboard,
   platformLabel,
   sendClipboard,
-  sendText,
   toMessage,
-  useHistoryStore,
+  useIdentityStore,
   usePeersStore,
   useSettingsStore,
   useStatusStore,
   useToast,
-  type ClipboardItemView,
 } from "@clipmesh/ui-core";
 
 /**
- * Android 首页：一个巨大的「广播剪贴板」按钮（对应通知栏那颗按钮的行为）+
- * 前台服务开关 + 最近收到的内容。
+ * Android 首页：结构对齐桌面端 —— 顶部保留「广播剪贴板」主按钮（对应通知栏那颗
+ * 按钮的行为），下面依次是「本机」和「在线设备」两个区块。
+ *
+ * 前台服务开关在设置页：打开它的时候会顺带申请通知权限，所以这里不再重复放一个
+ * 「申请通知权限」的按钮。
  */
 const statusStore = useStatusStore();
 const peersStore = usePeersStore();
-const historyStore = useHistoryStore();
 const settingsStore = useSettingsStore();
+const identityStore = useIdentityStore();
 const toast = useToast();
 
-const draft = ref("");
 const sendingClipboard = ref(false);
-const sendingText = ref(false);
-const serviceRunning = ref(false);
-const serviceAvailable = ref(true);
-const serviceBusy = ref(false);
-const notificationBusy = ref(false);
+const draftName = ref("");
+const savingName = ref(false);
 
-const onlinePeers = computed(() => peersStore.peers.filter((p) => p.connected));
-const recent = computed(() => historyStore.items.slice(0, 3));
+const identity = computed(() => identityStore.identity);
+/** 只列已经建立 TLS 会话的设备 —— 这一块的标题就是「在线设备」。 */
+const onlinePeers = computed(() => peersStore.online);
 
-onMounted(async () => {
-  try {
-    serviceRunning.value = await androidApi.isServiceRunning();
-  } catch (cause) {
-    // 非 Android 平台调用这些命令会抛错：直接隐藏这块 UI，而不是弹一堆错误
-    serviceAvailable.value = false;
-    console.info("[clipmesh] Android 专属命令不可用：", toMessage(cause));
-  }
-});
+watch(
+  () => settingsStore.settings?.deviceName,
+  (name) => {
+    if (name !== undefined) draftName.value = name;
+  },
+  { immediate: true },
+);
+
+const nameChanged = computed<boolean>(
+  () =>
+    draftName.value.trim() !== "" && draftName.value.trim() !== settingsStore.settings?.deviceName,
+);
 
 async function broadcast(): Promise<void> {
   sendingClipboard.value = true;
@@ -68,84 +69,30 @@ async function broadcast(): Promise<void> {
   }
 }
 
-async function sendDraft(): Promise<void> {
-  const content = draft.value.trim();
-  if (content === "") {
-    toast.warn("内容为空");
-    return;
-  }
-  sendingText.value = true;
+async function saveName(): Promise<void> {
+  if (!nameChanged.value) return;
+  savingName.value = true;
   try {
-    await sendText(content);
-    draft.value = "";
-    toast.success("已发送");
+    await settingsStore.setDeviceName(draftName.value);
+    toast.success("设备名已更新", "mDNS 已重新广播，其他设备会看到新名字。");
   } catch (cause) {
-    toast.error("发送失败", toMessage(cause));
+    toast.error("改名失败", toMessage(cause));
   } finally {
-    sendingText.value = false;
+    savingName.value = false;
   }
 }
 
-async function toggleService(value: boolean): Promise<void> {
-  serviceBusy.value = true;
-  try {
-    if (value) await androidApi.startService();
-    else await androidApi.stopService();
-    serviceRunning.value = value;
-    toast.success(value ? "前台服务已启动" : "前台服务已停止");
-  } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
-  } finally {
-    serviceBusy.value = false;
-  }
+async function copy(value: string, label: string): Promise<void> {
+  const ok = await copyToClipboard(value);
+  if (ok) toast.success(`${label}已复制`);
+  else toast.error("复制失败");
 }
 
-async function requestNotification(): Promise<void> {
-  notificationBusy.value = true;
-  try {
-    const granted = await androidApi.requestNotificationPermission();
-    toast[granted ? "success" : "warn"](
-      granted ? "通知权限已授予" : "通知权限被拒绝",
-      granted ? "收到远程剪贴板时会显示通知。" : "没有通知权限，后台收到内容不会有提示。",
-    );
-  } catch (cause) {
-    toast.error("请求失败", toMessage(cause));
-  } finally {
-    notificationBusy.value = false;
-  }
-}
-
-async function onAutoSync(value: boolean): Promise<void> {
-  try {
-    await settingsStore.update({ autoSync: value });
-  } catch (cause) {
-    toast.error("设置未保存", toMessage(cause));
-  }
-}
-
-async function onSyncImages(value: boolean): Promise<void> {
-  try {
-    await settingsStore.update({ syncImages: value });
-  } catch (cause) {
-    toast.error("设置未保存", toMessage(cause));
-  }
-}
-
-async function onCopy(item: ClipboardItemView): Promise<void> {
-  try {
-    await historyStore.copy(item.id);
-    toast.success("已复制到剪贴板");
-  } catch (cause) {
-    toast.error("复制失败", toMessage(cause));
-  }
-}
-
-async function onResend(item: ClipboardItemView): Promise<void> {
-  try {
-    const result = await historyStore.resend(item.id);
-    toast.success(`已重发（${result.delivered} 台）`);
-  } catch (cause) {
-    toast.error("重发失败", toMessage(cause));
+function exportCert(): void {
+  if (identityStore.exportCertificate()) {
+    toast.success("证书已导出", "可以把 .pem 文件发给对方，用来人工核对指纹。");
+  } else {
+    toast.error("没有可导出的证书");
   }
 }
 </script>
@@ -183,110 +130,127 @@ async function onResend(item: ClipboardItemView): Promise<void> {
       </p>
     </AppCard>
 
-    <AppCard title="发送文本" icon="text">
-      <textarea
-        v-model="draft"
-        class="cm-textarea"
-        rows="3"
-        placeholder="输入或粘贴要同步的文本"
-      />
-      <AppButton
-        class="mt"
-        variant="primary"
-        block
-        icon="send"
-        :loading="sendingText"
-        :disabled="draft.trim() === ''"
-        @click="sendDraft"
-      >
-        发送
-      </AppButton>
-    </AppCard>
+    <div class="sections">
+      <!-- 本机 -->
+      <section class="sec">
+        <header class="sec-head">
+          <span class="sec-icon"><AppIcon name="phone" :size="16" /></span>
+          <div class="sec-text">
+            <h2 class="sec-title">本机</h2>
+            <p class="sec-sub">名称、身份与证书</p>
+          </div>
+        </header>
 
-    <AppCard title="同步设置" icon="refresh">
-      <AppToggle
-        :model-value="settingsStore.autoSync"
-        label="后台自动同步"
-        description="复制内容后自动推送，不需要手动点广播。"
-        @update:model-value="onAutoSync"
-      />
-      <AppToggle
-        :model-value="settingsStore.settings?.syncImages ?? false"
-        label="同步图片"
-        description="大图按二进制分片传输，注意流量。"
-        @update:model-value="onSyncImages"
-      />
-    </AppCard>
+        <div class="sec-grid">
+          <AppCard title="本机名称" icon="phone" subtitle="同一网络里的其他设备会看到这个名字">
+            <input
+              v-model="draftName"
+              class="cm-input"
+              type="text"
+              maxlength="64"
+              placeholder="例如：我的 Pixel"
+              @keydown.enter="saveName"
+            />
+            <AppButton
+              class="mt"
+              variant="primary"
+              block
+              icon="check"
+              :disabled="!nameChanged"
+              :loading="savingName"
+              @click="saveName"
+            >
+              保存名称
+            </AppButton>
+            <p class="cm-help mt-sm">
+              当前生效：<b>{{ settingsStore.settings?.deviceName ?? statusStore.deviceName }}</b>，
+              改名后会重新广播 mDNS。
+            </p>
+          </AppCard>
 
-    <AppCard v-if="serviceAvailable" title="后台常驻" icon="bell" subtitle="Android 前台服务">
-      <AppToggle
-        :model-value="serviceRunning"
-        :disabled="serviceBusy"
-        label="常驻前台服务"
-        description="关闭后系统可能在熄屏后杀掉进程，导致收不到剪贴板。"
-        @update:model-value="toggleService"
-      />
-      <div class="service-row">
-        <p class="service-help">Android 13+ 需要通知权限才能显示常驻通知与接收提醒。</p>
-        <AppButton
-          size="sm"
-          icon="bell"
-          :loading="notificationBusy"
-          @click="requestNotification"
-        >
-          申请通知权限
-        </AppButton>
-      </div>
-    </AppCard>
+          <AppCard title="本机身份" icon="shield" subtitle="用于核对配对，不会上传到任何服务器">
+            <template v-if="identity">
+              <FingerprintBadge :fingerprint="identity.fingerprint" label="证书指纹" />
 
-    <AppCard title="最近收到" icon="inbox">
-      <template #actions>
-        <RouterLink to="/history" class="link">全部</RouterLink>
-      </template>
+              <div class="rows">
+                <div class="row">
+                  <span class="k">设备 ID</span>
+                  <span class="v cm-mono cm-truncate">{{ identity.deviceId }}</span>
+                </div>
+                <div class="row">
+                  <span class="k">平台</span>
+                  <span class="v">{{ platformLabel(identity.platform) }}</span>
+                </div>
+                <div class="row">
+                  <span class="k">公钥</span>
+                  <span class="v cm-mono cm-truncate">{{ identity.publicKey }}</span>
+                </div>
+              </div>
 
-      <div v-if="recent.length" class="cm-list">
-        <ClipboardItemCard
-          v-for="item in recent"
-          :key="item.id"
-          :item="item"
-          :source-name="peersStore.nameOf(item.sourceDevice)"
-          :thumbnail="historyStore.thumbnails[item.id] ?? null"
-          :busy="historyStore.isBusy(item.id)"
-          compact
-          @copy="onCopy"
-          @resend="onResend"
-        />
-      </div>
-      <EmptyState v-else compact icon="inbox" title="还没有收到内容" />
-    </AppCard>
+              <div class="actions">
+                <AppButton block icon="copy" @click="copy(identity.deviceId, '设备 ID ')">
+                  复制设备 ID
+                </AppButton>
+                <AppButton block icon="copy" @click="copy(identity.publicKey, '公钥')">
+                  复制公钥
+                </AppButton>
+              </div>
 
-    <AppCard title="在线设备" icon="devices">
-      <template #actions>
-        <RouterLink to="/devices" class="link">管理</RouterLink>
-      </template>
+              <div class="cert">
+                <div class="cert-head">
+                  <span class="cm-label">设备证书（PEM）</span>
+                  <AppButton size="sm" icon="download" @click="exportCert">导出证书</AppButton>
+                </div>
+                <pre class="cm-mono cert-body">{{ identity.certificatePem }}</pre>
+                <p class="cm-help">
+                  对方应该能在自己的设备上看到同一串指纹。指纹不同 = 有人在中间，别继续。
+                </p>
+              </div>
+            </template>
+            <p v-else class="cm-help">正在读取身份信息…</p>
+          </AppCard>
+        </div>
+      </section>
 
-      <div v-if="onlinePeers.length" class="cm-list">
-        <DeviceCard
-          v-for="peer in onlinePeers"
-          :key="peer.deviceId"
-          :name="peer.name"
-          :platform="peer.platform"
-          :fingerprint="peer.fingerprint"
-          :online="true"
-          :trusted="peer.trusted"
-          :last-seen="peer.lastSeen"
-          hide-fingerprint
-          :subtitle="peer.address"
-        />
-      </div>
-      <EmptyState
-        v-else
-        compact
-        icon="radar"
-        title="没有在线设备"
-        description="确认对方也开着 ClipMesh，并且在同一网络里。"
-      />
-    </AppCard>
+      <!-- 在线设备 -->
+      <section class="sec">
+        <header class="sec-head">
+          <span class="sec-icon"><AppIcon name="devices" :size="16" /></span>
+          <div class="sec-text">
+            <h2 class="sec-title">在线设备</h2>
+            <p class="sec-sub">
+              {{ onlinePeers.length }} 台已连接 · {{ peersStore.count }} 台被发现
+            </p>
+          </div>
+          <div class="sec-actions">
+            <RouterLink to="/devices" class="link">管理</RouterLink>
+          </div>
+        </header>
+
+        <div v-if="onlinePeers.length" class="sec-grid">
+          <DeviceCard
+            v-for="peer in onlinePeers"
+            :key="peer.deviceId"
+            :name="peer.name"
+            :platform="peer.platform"
+            :fingerprint="peer.fingerprint"
+            :online="true"
+            :trusted="peer.trusted"
+            :last-seen="peer.lastSeen"
+            hide-fingerprint
+            :subtitle="peer.address"
+          />
+        </div>
+        <AppCard v-else flush>
+          <EmptyState
+            compact
+            icon="radar"
+            title="没有在线设备"
+            description="确认对方也开着 ClipMesh，并且在同一网络里。"
+          />
+        </AppCard>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -296,6 +260,8 @@ async function onResend(item: ClipboardItemView): Promise<void> {
   flex-direction: column;
   gap: 14px;
 }
+
+/* ---------- 广播剪贴板 ---------- */
 
 .hero {
   background: linear-gradient(160deg, var(--accent-soft), transparent 65%), var(--surface);
@@ -332,27 +298,152 @@ async function onResend(item: ClipboardItemView): Promise<void> {
   line-height: 1.5;
 }
 
-.mt {
-  margin-top: 10px;
-}
+/* ---------- 区块 ---------- */
 
-.service-row {
+.sections {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
+  gap: var(--space-5);
 }
 
-.service-help {
+.sec-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.sec-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   color: var(--text-muted);
+}
+
+.sec-text {
+  min-width: 0;
+}
+
+.sec-title {
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.sec-sub {
+  color: var(--text-dim);
   font-size: 12px;
-  line-height: 1.5;
+}
+
+.sec-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/*
+ * 卡片行：按可用宽度自动换行。
+ * `min(100%, 300px)` 而不是写死 300px —— 手机内容区比 300px 还窄时，
+ * 写死的下限会把卡片顶出屏幕。
+ */
+.sec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-3);
+  align-items: start;
 }
 
 .link {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* ---------- 本机身份 ---------- */
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.k {
+  flex: none;
+  width: 58px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.v {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.actions > * {
+  flex: 1;
+}
+
+.cert {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.cert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.cert-body {
+  max-height: 148px;
+  margin: 0 0 8px;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mt {
+  margin-top: 12px;
+}
+
+.mt-sm {
+  margin-top: 8px;
 }
 </style>

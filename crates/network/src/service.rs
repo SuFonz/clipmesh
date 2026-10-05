@@ -190,6 +190,31 @@ impl NetworkService {
         let _ = self.events.send(NetworkEvent::Connected(Box::new(peer)));
     }
 
+    /// Run `f` over the sessions that are still worth talking to.
+    ///
+    /// Entries whose socket has finished are swept out first. Nothing else
+    /// removes them: [`NetworkProvider::disconnect`] only runs when we hang up
+    /// deliberately, and [`NetworkProvider::shutdown`] clears the whole table at
+    /// once. A session that ended on its own - the peer was killed, or its
+    /// process restarted - therefore stayed in the table, and `is_connected` went
+    /// on answering `true` for a peer that was long gone. Every re-dial is skipped
+    /// while that is true, which is why a device that restarted showed as offline
+    /// until the engine was restarted by hand.
+    ///
+    /// `SessionHandle::writer` is the authority here; it is finished exactly when
+    /// the write half has stopped.
+    fn with_live_sessions<T>(&self, f: impl FnOnce(&HashMap<DeviceId, SessionHandle>) -> T) -> T {
+        let mut sessions = self.sessions.lock();
+        sessions.retain(|device, handle| {
+            let alive = !handle.writer.is_finished();
+            if !alive {
+                tracing::debug!(%device, "forgot a session whose socket closed");
+            }
+            alive
+        });
+        f(&sessions)
+    }
+
     async fn run_discovery(self: Arc<Self>, mut browse: BoxStream<'static, DiscoveryEvent>) {
         while let Some(event) = browse.next().await {
             match event {
@@ -354,8 +379,12 @@ impl NetworkProvider for NetworkService {
         Ok(delivered)
     }
 
+    fn is_connected(&self, device: DeviceId) -> bool {
+        self.with_live_sessions(|sessions| sessions.contains_key(&device))
+    }
+
     fn connected_peers(&self) -> Vec<DeviceId> {
-        self.sessions.lock().keys().copied().collect()
+        self.with_live_sessions(|sessions| sessions.keys().copied().collect())
     }
 
     fn events(&self) -> BoxStream<'static, NetworkEvent> {

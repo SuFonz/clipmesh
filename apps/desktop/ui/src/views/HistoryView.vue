@@ -104,7 +104,7 @@ async function refresh(): Promise<void> {
           :disabled="historyStore.count === 0"
           @click="confirmClear = true"
         >
-          清空
+          清除剪贴板
         </AppButton>
       </div>
     </header>
@@ -167,7 +167,7 @@ async function refresh(): Promise<void> {
           v-else
           icon="clipboard"
           title="还没有任何历史"
-          description="开启自动同步，或者在仪表盘手动发送一次试试。"
+          description="开启自动同步，其他设备同步过来的内容会自动出现在这里。"
         />
       </div>
     </AppCard>
@@ -175,9 +175,9 @@ async function refresh(): Promise<void> {
     <ConfirmDialog
       :open="confirmClear"
       tone="danger"
-      title="清空全部历史？"
-      :message="`将删除本机保存的 ${historyStore.count} 条记录（包含图片元数据），此操作不可撤销。已经同步到其他设备的内容不受影响。`"
-      confirm-label="清空历史"
+      title="清除剪贴板历史？"
+      :message="`将删除本机保存的 ${historyStore.count} 条记录（包含图片元数据），此操作不可恢复。已经同步到其他设备的内容不受影响。`"
+      confirm-label="清除"
       :busy="clearing"
       @cancel="confirmClear = false"
       @confirm="doClear"

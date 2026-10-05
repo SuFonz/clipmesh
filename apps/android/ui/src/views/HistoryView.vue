@@ -83,7 +83,7 @@ async function doClear(): Promise<void> {
       </div>
       <AppButton
         icon="trash"
-        variant="ghost"
+        variant="danger"
         icon-only
         title="清空历史"
         :disabled="historyStore.count === 0"

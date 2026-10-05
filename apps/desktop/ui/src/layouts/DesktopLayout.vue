@@ -29,10 +29,9 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { to: "/", label: "仪表盘", icon: "dashboard", hint: "状态与快捷发送" },
-  { to: "/devices", label: "设备", icon: "devices", hint: "发现 / 信任的设备" },
+  { to: "/", label: "首页", icon: "dashboard", hint: "本机与在线设备" },
+  { to: "/devices", label: "设备", icon: "devices", hint: "配对请求 / 发现 / 信任的设备" },
   { to: "/history", label: "历史", icon: "history", hint: "最近的剪贴板内容" },
-  { to: "/pairing", label: "配对", icon: "link", hint: "等待处理的配对请求" },
   { to: "/settings", label: "设置", icon: "settings", hint: "同步与身份" },
 ];
 
@@ -46,9 +45,9 @@ const toast = useToast();
 const mock = isMock();
 const toggling = ref(false);
 
+/** 配对请求现在直接排在设备页最上面，所以徽标把"待决定的请求"也一起算进去（与 Android 一致）。 */
 const badges = computed<Record<string, number>>(() => ({
-  "/pairing": pairingStore.incomingCount,
-  "/devices": peersStore.untrusted.length,
+  "/devices": pairingStore.incomingCount + peersStore.untrusted.length,
 }));
 
 const isActive = (to: string): boolean => route.path === to;
