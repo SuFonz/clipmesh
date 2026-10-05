@@ -75,6 +75,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::clear_error,
             commands::list_peers,
             commands::list_trusted_devices,
             commands::list_pairing_requests,

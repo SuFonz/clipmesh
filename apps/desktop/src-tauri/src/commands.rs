@@ -75,6 +75,16 @@ pub fn get_status(state: State<'_, AppState>) -> Ipc<StatusView> {
     Ok(state.engine.status())
 }
 
+/// Acknowledge the last error so the banner can be dismissed.
+///
+/// Without this the UI had nothing to call: `lastError` is part of every status
+/// snapshot, so clearing it only locally brought it straight back on the next
+/// event.
+#[tauri::command]
+pub fn clear_error(state: State<'_, AppState>) -> Ipc<StatusView> {
+    Ok(state.engine.clear_error())
+}
+
 /// Devices currently visible on the network.
 #[tauri::command]
 pub fn list_peers(state: State<'_, AppState>) -> Ipc<Vec<PeerView>> {

@@ -60,6 +60,16 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
         private const val TAG = "ClipMeshPlugin"
         private const val CLIPBOARD_DIR = "clipboard"
         private const val CLIPBOARD_FILE = "clipmesh-clipboard.png"
+
+        /**
+         * Set when the notification's broadcast action brings the app forward.
+         *
+         * A plain field rather than instance state: the activity can be recreated
+         * between the tap and the UI collecting it, and the request would be lost
+         * with the old instance.
+         */
+        @Volatile
+        private var pendingBroadcast = false
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -257,6 +267,24 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
+    /**
+     * Send the app to the back of the task stack.
+     *
+     * Used after a broadcast, so the user lands back in whatever they were
+     * doing instead of being left inside ClipMesh - the clipboard can only be
+     * read while the app has focus, so a broadcast from outside necessarily
+     * brings it forward first, and this is what makes that cost a moment rather
+     * than a detour.
+     *
+     * `moveTaskToBack` rather than `finish()`: the process, and with it the
+     * engine, has to stay alive behind the foreground service.
+     */
+    @Command
+    fun leaveApp(invoke: Invoke) {
+        activity.moveTaskToBack(true)
+        invoke.resolve()
+    }
+
     /** Whether the foreground service is alive. */
     @Command
     fun serviceRunning(invoke: Invoke) {
@@ -272,29 +300,41 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
     // -----------------------------------------------------------------------
 
     /**
-     * Called by the Tauri activity when it is launched or re-launched from a
-     * notification action.
+     * Called by the Tauri activity when a notification action relaunches it.
      *
-     * Android 10+ will not let a background app read the clipboard, so the
-     * "broadcast clipboard" button brings the app forward and the work happens
-     * here, where the app has focus again.
+     * Android 10+ will not let a background app read the clipboard, so tapping
+     * "broadcast clipboard" has to bring the activity forward first. All this
+     * does is remember *why* we were brought forward; the UI collects it with
+     * [takePendingBroadcast] once it is up, which is also when the clipboard
+     * becomes readable.
+     *
+     * This used to call `trigger("broadcast-clipboard")`. That went nowhere:
+     * `trigger` only delivers to `Channel`s registered through the plugin's
+     * `registerListener`, and our plugin is not in the Tauri ACL, so the UI has
+     * no way to register one. The button brought the app up and did nothing else.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         when (intent.action) {
             ClipMeshNotifications.ACTION_BROADCAST -> {
-                Log.i(TAG, "forwarding the broadcast request to the UI")
-                trigger("broadcast-clipboard", JSObject())
-            }
-            ClipMeshNotifications.ACTION_COPY -> {
-                val id = intent.getStringExtra(ClipMeshNotifications.EXTRA_ENTRY_ID)
-                trigger(
-                    "copy-entry",
-                    JSObject().apply { put("entryId", id) },
-                )
+                Log.i(TAG, "the notification asked for a clipboard broadcast")
+                pendingBroadcast = true
             }
             else -> Unit
         }
+    }
+
+    /**
+     * Collect a broadcast request that came from the notification.
+     *
+     * Returns `{"requested": true}` at most once per tap; the flag is cleared so
+     * a poll that runs twice cannot send twice.
+     */
+    @Command
+    fun takePendingBroadcast(invoke: Invoke) {
+        val requested = pendingBroadcast
+        pendingBroadcast = false
+        invoke.resolve(JSObject().apply { put("requested", requested) })
     }
 
     // -----------------------------------------------------------------------

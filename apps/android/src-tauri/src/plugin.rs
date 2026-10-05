@@ -201,6 +201,33 @@ impl<R: Runtime> NativeBridge<R> {
         self.call::<Granted>("requestNotificationPermission", ())
             .map(|response| response.granted)
     }
+
+    /// Send the app to the back of the task stack.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn leave_app(&self) -> Result<(), String> {
+        // Kotlin answers with a bare `resolve()`, i.e. JSON null, so the result
+        // is parsed as an opaque value rather than a struct.
+        self.call::<serde_json::Value>("leaveApp", ())?;
+        Ok(())
+    }
+
+    /// Whether the notification asked for a clipboard broadcast.
+    ///
+    /// Answering `true` consumes the request.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn take_pending_broadcast(&self) -> Result<bool, String> {
+        #[derive(Deserialize)]
+        struct Pending {
+            requested: bool,
+        }
+
+        self.call::<Pending>("takePendingBroadcast", ())
+            .map(|response| response.requested)
+    }
 }
 
 #[derive(Serialize)]

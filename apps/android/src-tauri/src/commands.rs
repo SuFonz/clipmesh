@@ -55,6 +55,30 @@ pub async fn android_service_running(state: State<'_, NativeState>) -> Ipc<bool>
     Ok(state.clipboard.host().is_foreground_service_running())
 }
 
+/// Send the app to the back of the task stack after a broadcast.
+///
+/// Android only lets an app read the clipboard while it has focus, so a
+/// broadcast started from the notification has to bring ClipMesh forward first.
+/// This is what turns that into a moment instead of a detour the user has to
+/// walk back from by hand.
+#[tauri::command]
+pub async fn android_leave_app(state: State<'_, NativeState>) -> Ipc<()> {
+    let bridge = state.bridge.clone();
+    bridge.leave_app().map_err(fail)
+}
+
+/// Whether the notification asked for a clipboard broadcast.
+///
+/// Answering `true` consumes the request. Android will not let a background app
+/// read the clipboard, so the notification action can only bring the activity
+/// forward and leave a note; this is how the UI picks that note up, once it is
+/// running and the clipboard is readable again.
+#[tauri::command]
+pub async fn android_take_pending_broadcast(state: State<'_, NativeState>) -> Ipc<bool> {
+    let bridge = state.bridge.clone();
+    bridge.take_pending_broadcast().map_err(fail)
+}
+
 /// Ask for the notification permission (Android 13 and later).
 #[tauri::command]
 pub async fn android_request_notification_permission(state: State<'_, NativeState>) -> Ipc<bool> {

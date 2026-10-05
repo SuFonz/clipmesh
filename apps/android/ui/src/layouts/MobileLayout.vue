@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import {
+  AppButton,
   AppIcon,
   StatusPill,
+  androidApi,
   isMock,
+  sendClipboard,
   toMessage,
   usePairingStore,
   usePeersStore,
@@ -70,6 +73,71 @@ async function toggleEngine(): Promise<void> {
     busy.value = false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 广播剪贴板
+// ---------------------------------------------------------------------------
+
+const sending = ref(false);
+
+/** 读剪贴板、推给在线设备，并提示结果；返回是否成功。 */
+async function runBroadcast(): Promise<boolean> {
+  sending.value = true;
+  try {
+    const result = await sendClipboard();
+    toast.success(
+      result.delivered > 0 ? `已广播到 ${result.delivered} 台设备` : "没有在线设备，已存入历史",
+    );
+    return true;
+  } catch (cause) {
+    toast.error("广播失败", toMessage(cause));
+    return false;
+  } finally {
+    sending.value = false;
+  }
+}
+
+/** 按钮：广播完留在应用里，用户没打算离开。 */
+async function broadcast(): Promise<void> {
+  await runBroadcast();
+}
+
+/**
+ * 通知栏那颗「广播剪贴板」的落点。
+ *
+ * 那颗按钮只能把应用带到前台 —— Android 10+ 不允许后台读剪贴板 —— 并在
+ * `onNewIntent` 里留一个标记。这里取走它：广播一次，然后把用户送回他原来的应用。
+ * 这就是"半无感"能做到的上限：应用必须露个面，但不会把人困住。
+ *
+ * 轮询放在**外壳**而不是首页，因为通知可能在任何标签页上被点开 —— 挂在首页的话
+ * 用户在设置页时首页根本没挂载，请求就丢了。
+ */
+let pendingPoll: ReturnType<typeof setInterval> | undefined;
+
+async function collectPendingBroadcast(): Promise<void> {
+  let requested: boolean;
+  try {
+    requested = await androidApi.takePendingBroadcast();
+  } catch {
+    // 非 Android 平台（浏览器调试）没有这个命令。
+    return;
+  }
+  if (!requested) return;
+
+  if (await runBroadcast()) {
+    await androidApi.leaveApp().catch(() => undefined);
+  }
+}
+
+onMounted(() => {
+  pendingPoll = setInterval(() => {
+    void collectPendingBroadcast();
+  }, 500);
+});
+
+onBeforeUnmount(() => {
+  if (pendingPoll !== undefined) clearInterval(pendingPoll);
+});
 </script>
 
 <template>
@@ -92,6 +160,21 @@ async function toggleEngine(): Promise<void> {
           pulse
           size="sm"
         />
+        <!--
+          广播剪贴板和引擎开关并排放在顶栏：两个都是全局动作，任何标签页都用得上，
+          所以不放在某一个页面的操作行里。用 `size="lg"`（48px）与旁边那颗
+          `icon-btn` 的 `--tap-min` 对齐 —— 顶栏本来就以它为准，不会再变高。
+        -->
+        <AppButton
+          variant="primary"
+          size="lg"
+          icon="send"
+          :loading="sending"
+          :disabled="!statusStore.running"
+          @click="broadcast"
+        >
+          广播剪贴板
+        </AppButton>
         <button
           class="icon-btn"
           type="button"

@@ -104,6 +104,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Shared with the desktop build.
             clipmesh_desktop_lib::commands::get_status,
+            clipmesh_desktop_lib::commands::clear_error,
             clipmesh_desktop_lib::commands::list_peers,
             clipmesh_desktop_lib::commands::list_trusted_devices,
             clipmesh_desktop_lib::commands::list_pairing_requests,
@@ -128,6 +129,8 @@ pub fn run() {
             commands::android_start_service,
             commands::android_stop_service,
             commands::android_service_running,
+            commands::android_leave_app,
+            commands::android_take_pending_broadcast,
             commands::android_request_notification_permission,
             commands::android_push_clipboard,
             commands::android_report_error,

@@ -12,6 +12,7 @@ import {
   StatusPill,
   copyToClipboard,
   platformLabel,
+  sendClipboard,
   toMessage,
   useIdentityStore,
   usePeersStore,
@@ -33,6 +34,7 @@ const toast = useToast();
 const draftName = ref("");
 const savingName = ref(false);
 const togglingEngine = ref(false);
+const sendingClipboard = ref(false);
 
 const identity = computed(() => identityStore.identity);
 /** 只列已经建立 TLS 会话的设备 —— 这一块的标题就是「在线设备」。 */
@@ -95,6 +97,42 @@ async function toggleEngine(): Promise<void> {
     togglingEngine.value = false;
   }
 }
+
+/**
+ * 把本机剪贴板广播给已配对的设备。
+ *
+ * 提示由这里给而不是靠事件：`clipmesh://clipboard-sent` 只从自动同步的监听路径
+ * 发出（`manager.rs` 的 `handle_local_change`），手动发送不经过它，所以不会重复弹。
+ */
+async function sendLocalClipboard(): Promise<void> {
+  sendingClipboard.value = true;
+  try {
+    const result = await sendClipboard();
+    if (result.delivered > 0) {
+      toast.success("已发送剪贴板", `投递到 ${result.delivered} 台在线设备`);
+    } else {
+      toast.warn("没有在线设备", "内容已留在历史里，等设备上线后可重发。");
+    }
+  } catch (cause) {
+    toast.error("发送失败", toMessage(cause));
+  } finally {
+    sendingClipboard.value = false;
+  }
+}
+
+/**
+ * 关掉错误横幅。
+ *
+ * 必须走后端：横幅读的是状态快照里的 `lastError`，只清前端变量的话，
+ * 下一条 `clipmesh://status` 会把它原样带回来，看起来就是"关不掉"。
+ */
+async function dismissError(): Promise<void> {
+  try {
+    await statusStore.clearError();
+  } catch (cause) {
+    toast.error("无法清除这条错误", toMessage(cause));
+  }
+}
 </script>
 
 <template>
@@ -116,6 +154,15 @@ async function toggleEngine(): Promise<void> {
         />
         <StatusPill :label="`发现 ${peersStore.count}`" tone="info" icon="radar" />
         <AppButton
+          variant="primary"
+          icon="send"
+          :loading="sendingClipboard"
+          :disabled="sendingClipboard"
+          @click="sendLocalClipboard"
+        >
+          发送剪贴板
+        </AppButton>
+        <AppButton
           :variant="statusStore.running ? 'secondary' : 'primary'"
           :icon="statusStore.running ? 'power' : 'zap'"
           :loading="togglingEngine"
@@ -129,7 +176,7 @@ async function toggleEngine(): Promise<void> {
     <div v-if="statusStore.lastError" class="banner" role="alert">
       <AppIcon name="alert" :size="16" />
       <span class="banner-text">{{ statusStore.lastError }}</span>
-      <AppButton size="sm" variant="ghost" @click="statusStore.setError(null)">知道了</AppButton>
+      <AppButton size="sm" variant="ghost" @click="dismissError">知道了</AppButton>
     </div>
 
     <div class="sections">

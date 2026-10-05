@@ -9,10 +9,8 @@ import {
   DeviceCard,
   EmptyState,
   FingerprintBadge,
-  StatusPill,
   copyToClipboard,
   platformLabel,
-  sendClipboard,
   toMessage,
   useIdentityStore,
   usePeersStore,
@@ -22,8 +20,15 @@ import {
 } from "@clipmesh/ui-core";
 
 /**
- * Android 首页：结构对齐桌面端 —— 顶部保留「广播剪贴板」主按钮（对应通知栏那颗
- * 按钮的行为），下面依次是「本机」和「在线设备」两个区块。
+ * Android 首页：结构对齐桌面端 —— 一条操作行（只有「广播剪贴板」），下面依次是
+ * 「本机」和「在线设备」两个区块。
+ *
+ * 引擎开关不在这里：外壳 MobileLayout 的顶栏已经有一颗，所有标签页共用。放两份
+ * 只会让人猜哪个才算数。
+ *
+ * 页面标题和「引擎运行中 / N 台在线」的状态副标题同样由外壳提供，设备名在
+ * 「本机名称」卡片里、平台在「本机身份」卡片里、监听端口在设置页的「关于」卡片里
+ * —— 所以这一页不再自己放一张状态卡片，免得同一个屏幕上出现两遍。
  *
  * 前台服务开关在设置页：打开它的时候会顺带申请通知权限，所以这里不再重复放一个
  * 「申请通知权限」的按钮。
@@ -34,7 +39,6 @@ const settingsStore = useSettingsStore();
 const identityStore = useIdentityStore();
 const toast = useToast();
 
-const sendingClipboard = ref(false);
 const draftName = ref("");
 const savingName = ref(false);
 
@@ -55,19 +59,11 @@ const nameChanged = computed<boolean>(
     draftName.value.trim() !== "" && draftName.value.trim() !== settingsStore.settings?.deviceName,
 );
 
-async function broadcast(): Promise<void> {
-  sendingClipboard.value = true;
-  try {
-    const result = await sendClipboard();
-    toast.success(
-      result.delivered > 0 ? `已广播到 ${result.delivered} 台设备` : "没有在线设备，已存入历史",
-    );
-  } catch (cause) {
-    toast.error("广播失败", toMessage(cause));
-  } finally {
-    sendingClipboard.value = false;
-  }
-}
+/**
+ * 「广播剪贴板」和引擎开关都在外壳 `MobileLayout` 的顶栏里 —— 两个都是全局动作，
+ * 不属于某一页。通知栏那条广播链（轮询 + 发完退回原应用）也在那里，因为通知可能在
+ * 任何标签页上被点开，挂在首页会漏掉。
+ */
 
 async function saveName(): Promise<void> {
   if (!nameChanged.value) return;
@@ -99,37 +95,6 @@ function exportCert(): void {
 
 <template>
   <div class="view">
-    <AppCard tone="accent" class="hero">
-      <div class="hero-top">
-        <div class="hero-text">
-          <p class="hero-name cm-truncate">{{ statusStore.deviceName }}</p>
-          <p class="hero-meta">
-            {{ platformLabel(statusStore.platform) }} · 端口 {{ statusStore.listenPort }}
-          </p>
-        </div>
-        <StatusPill
-          :label="statusStore.running ? '运行中' : '已停止'"
-          :tone="statusStore.running ? 'ok' : 'idle'"
-          :pulse="statusStore.running"
-        />
-      </div>
-
-      <AppButton
-        class="broadcast"
-        variant="primary"
-        size="lg"
-        block
-        icon="send"
-        :loading="sendingClipboard"
-        @click="broadcast"
-      >
-        广播当前剪贴板
-      </AppButton>
-      <p class="hero-help">
-        读取系统剪贴板并推送给 {{ onlinePeers.length }} 台在线设备。这和通知栏上的那颗按钮是同一个动作。
-      </p>
-    </AppCard>
-
     <div class="sections">
       <!-- 本机 -->
       <section class="sec">
@@ -259,43 +224,6 @@ function exportCert(): void {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-/* ---------- 广播剪贴板 ---------- */
-
-.hero {
-  background: linear-gradient(160deg, var(--accent-soft), transparent 65%), var(--surface);
-}
-
-.hero-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-.hero-name {
-  font-size: 16px;
-  font-weight: 680;
-  letter-spacing: -0.01em;
-}
-
-.hero-meta {
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.broadcast {
-  font-size: 16px;
-}
-
-.hero-help {
-  margin-top: 9px;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 /* ---------- 区块 ---------- */

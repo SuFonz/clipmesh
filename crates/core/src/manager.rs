@@ -399,6 +399,19 @@ impl SyncManager {
         }
     }
 
+    /// Drop the stored error and tell the UI about it.
+    ///
+    /// `report` only ever writes an error; without this there is no way to
+    /// acknowledge one, so a banner driven by [`StatusView::last_error`] could
+    /// never be dismissed - every fresh snapshot carried the message straight
+    /// back.
+    pub fn clear_error(&self) -> StatusView {
+        *self.last_error.lock() = None;
+        let status = self.status();
+        self.emit_status();
+        status
+    }
+
     /// Devices currently visible on the network.
     #[must_use]
     pub fn peers(&self) -> Vec<PeerView> {

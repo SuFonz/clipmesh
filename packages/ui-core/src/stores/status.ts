@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
-import { getStatus, startEngine, stopEngine } from "../api/commands";
+import { clearError as clearErrorCommand, getStatus, startEngine, stopEngine } from "../api/commands";
 import type { Platform, StatusView } from "../types";
 
 /**
@@ -57,6 +57,19 @@ export const useStatusStore = defineStore("status", () => {
     setStatus(await stopEngine());
   }
 
+  /**
+   * 关掉当前这条错误。
+   *
+   * 必须让后端把它忘掉，而不是只清前端：`lastError` 是状态快照里的字段，
+   * 下一条 `clipmesh://status` 会原样带回来，横幅就又出现了。
+   * 本地那条 `error`（启动填充失败之类的、后端不知道的错）一起清掉，
+   * 两个通道不会互相打架。
+   */
+  async function clearError(): Promise<void> {
+    error.value = null;
+    setStatus(await clearErrorCommand());
+  }
+
   return {
     status,
     loading,
@@ -77,6 +90,7 @@ export const useStatusStore = defineStore("status", () => {
     refresh,
     start,
     stop,
+    clearError,
   };
 });
 

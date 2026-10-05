@@ -133,6 +133,7 @@ export interface CommandMap {
   // 生命周期
   start_engine: { args: void; result: StatusView };
   stop_engine: { args: void; result: StatusView };
+  clear_error: { args: void; result: StatusView };
   update_settings: { args: { patch: Partial<SettingsView> }; result: SettingsView };
   set_device_name: { args: { name: string }; result: IdentityView };
 
@@ -154,6 +155,8 @@ export interface CommandMap {
   android_stop_service: { args: void; result: void };
   android_service_running: { args: void; result: boolean };
   android_request_notification_permission: { args: void; result: boolean };
+  android_leave_app: { args: void; result: void };
+  android_take_pending_broadcast: { args: void; result: boolean };
 }
 
 export type CommandName = keyof CommandMap;

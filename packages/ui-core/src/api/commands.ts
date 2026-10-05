@@ -59,6 +59,16 @@ export function stopEngine(): Promise<StatusView> {
   return call("stop_engine");
 }
 
+/**
+ * 清掉引擎记住的那条错误，并返回新的状态快照。
+ *
+ * 关闭错误横幅必须走这里：横幅显示的是后端快照里的 `lastError`，
+ * 只清前端本地变量的话，下一条 `clipmesh://status` 会把它原样带回来。
+ */
+export function clearError(): Promise<StatusView> {
+  return call("clear_error");
+}
+
 /** 局部更新设置，立即生效并持久化。 */
 export function updateSettings(patch: Partial<SettingsView>): Promise<SettingsView> {
   return call("update_settings", { patch });
@@ -131,6 +141,27 @@ export function androidRequestNotificationPermission(): Promise<boolean> {
   return call("android_request_notification_permission");
 }
 
+/**
+ * 广播完成后把应用退回后台。
+ *
+ * 读剪贴板要求应用有焦点，所以从外部发起的广播必然会把 ClipMesh 带到前台；
+ * 这个调用让用户回到原来的应用，而不是被留在 ClipMesh 里自己按返回键。
+ * 非 Android 平台会抛错，调用方自己吞掉即可。
+ */
+export function androidLeaveApp(): Promise<void> {
+  return call("android_leave_app");
+}
+
+/**
+ * 通知栏是否请求了一次广播。返回 `true` 时请求已被消费（不会重复）。
+ *
+ * 读剪贴板要求应用有焦点，所以通知栏那颗按钮只能先把应用带到前台、留下一个标记，
+ * 由界面在能读剪贴板之后取走。
+ */
+export function androidTakePendingBroadcast(): Promise<boolean> {
+  return call("android_take_pending_broadcast");
+}
+
 /** 把上面这一组命令聚在一起，方便在组件里 `import { clipboard } from ...`。 */
 export const clipboardApi = {
   sendClipboard,
@@ -155,4 +186,6 @@ export const androidApi = {
   stopService: androidStopService,
   isServiceRunning: androidServiceRunning,
   requestNotificationPermission: androidRequestNotificationPermission,
+  leaveApp: androidLeaveApp,
+  takePendingBroadcast: androidTakePendingBroadcast,
 } as const;

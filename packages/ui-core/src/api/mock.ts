@@ -715,6 +715,10 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
       broadcastPeers();
       broadcastTrusted();
       return { ...state.status };
+    case "clear_error":
+      state.status.lastError = null;
+      broadcastStatus();
+      return { ...state.status };
     case "update_settings": {
       const patch = patchOf(a.patch);
       state.settings = { ...state.settings, ...patch };
@@ -884,6 +888,14 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
       await sleep(280);
       state.notificationPermission = true;
       return true;
+    case "android_leave_app":
+      // 真机上会把应用退回后台 —— 浏览器里没有对应动作，静默成功即可。
+      requireAndroid();
+      return undefined;
+    case "android_take_pending_broadcast":
+      // 浏览器里没有通知栏，永远不会有待处理的广播。
+      requireAndroid();
+      return false;
   }
 }
 
