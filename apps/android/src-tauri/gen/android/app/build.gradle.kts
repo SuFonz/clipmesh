@@ -14,9 +14,31 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// AGP strips native libraries with the NDK's `llvm-strip`. With no NDK resolved
+// it silently gives up:
+//
+//   Unable to strip the following libraries, packaging them as they are:
+//   libclipmesh_android_lib.so
+//
+// and a *debug* Rust library then ships with all of its DWARF - 301 MB instead
+// of ~26 MB. Release builds look fine either way because
+// `[profile.release] strip = true` in the workspace Cargo.toml already stripped
+// them in cargo, which is what made this easy to miss.
+//
+// Prefer the NDK the environment points at so a different machine works without
+// editing this file; fall back to the version this project was built against.
+//
+// (`file(...)` rather than `java.io.File(...)`: inside a Gradle Kotlin DSL script
+// the identifier `java` resolves to the Java project extension, not the package.)
+val resolvedNdkVersion: String =
+    System.getenv("ANDROID_NDK_HOME")?.let { file(it).name }
+        ?: System.getenv("NDK_HOME")?.let { file(it).name }
+        ?: "29.0.13846066"
+
 android {
     compileSdk = 37
     namespace = "app.cm.clipmesh"
+    ndkVersion = resolvedNdkVersion
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "app.cm.clipmesh"
@@ -31,12 +53,19 @@ android {
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {
-                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
-                jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86/*.so")
-                jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
-            }
+            // NOTE: Tauri's template puts a `packaging { jniLibs.keepDebugSymbols }`
+            // block here so native debugging works on device. It was removed on
+            // purpose: it stopped AGP from stripping the Rust libraries, and an
+            // unstripped debug libclipmesh_android_lib.so is ~300 MB, of which
+            // ~275 MB is DWARF. The NDK's llvm-strip takes it to ~26 MB.
+            //
+            // Trade-off: no breakpoints inside Rust when running on a device. To
+            // get them back for the ABI you are actually debugging, re-add just
+            // that one line:
+            //
+            //     packaging { jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so") }
+            //
+            // See docs/BUILD.md section 9.
         }
         getByName("release") {
             optimization {

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tauri android dev",
-    "build": "tauri android build",
+    "build": "tauri android build --target aarch64 armv7 --split-per-abi",
+    "build:apk": "tauri android build --target aarch64 armv7 --split-per-abi --apk",
+    "build:aab": "tauri android build --target aarch64 armv7 --split-per-abi --aab",
     "tauri": "tauri"
   },
   "devDependencies": {
