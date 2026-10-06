@@ -32,7 +32,7 @@ These five are hard constraints; every implementation detail must obey them:
                                     │ invoke / event  (docs/IPC.md)
                     ┌───────────────┴──────────────┐
                     │        Tauri 2 Runtime       │
-                    │   window · tray · autostart  │
+                    │   window · tray              │
                     │   command layer              │
                     └───────────────┬──────────────┘
                                     │ Arc<SyncManager>
@@ -286,7 +286,7 @@ When `SyncManager` receives a `Discovered` event it applies this rule to decide 
 | Layer | Responsibility |
 | --- | --- |
 | Rust | Clipboard watching, TCP/TLS, mDNS, identity verification, background operation |
-| Tauri | Window, system tray, settings, launch at login |
+| Tauri | Window, system tray, settings |
 | Vue | `DesktopLayout`: side navigation + multiple columns + status bar |
 
 Tray menu: show main window / broadcast clipboard now / pause auto-sync / quit.

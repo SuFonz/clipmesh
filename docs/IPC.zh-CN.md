@@ -108,7 +108,6 @@ export interface SettingsView {
   syncImages: boolean;
   maxImageBytes: number;
   startMinimized: boolean;    // 桌面：启动即最小化到托盘
-  launchAtLogin: boolean;     // 桌面：开机自启
   androidForegroundService: boolean; // Android：常驻前台服务
   historyCapacity: number;    // 保留多少条剪贴板记录（1..=500，默认 50）
   language: LanguageSetting;  // 不认识的值在 Rust 侧退化成 "system"

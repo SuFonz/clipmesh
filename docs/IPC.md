@@ -108,7 +108,6 @@ export interface SettingsView {
   syncImages: boolean;
   maxImageBytes: number;
   startMinimized: boolean;    // desktop: start minimized to the tray
-  launchAtLogin: boolean;     // desktop: launch at login
   androidForegroundService: boolean; // Android: keep the foreground service running
   historyCapacity: number;    // how many clipboard entries to keep (1..=500, 50 by default)
   language: LanguageSetting;  // unknown values degrade to "system" on the Rust side

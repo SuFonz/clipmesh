@@ -5,7 +5,7 @@ edition = "2021"
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "ClipMesh desktop application: Tauri host, tray, autostart and the IPC command layer"
+description = "ClipMesh desktop application: Tauri host, tray and the IPC command layer"
 authors = ["ClipMesh contributors"]
 
 [lib]

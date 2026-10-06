@@ -80,10 +80,9 @@ export const settings = {
     en: "Start minimised to the tray",
   },
   "settings.startMinimized.description": {
-    "zh-CN": "开机自启时不弹出窗口，只在托盘里待命。",
+    "zh-CN": "启动时不弹出窗口，只在托盘里待命。",
     en: "Launches without showing a window — it waits in the tray instead.",
   },
-  "settings.launchAtLogin.label": { "zh-CN": "开机自启", en: "Launch at login" },
 
   /* --- Android 专属 --- */
   "settings.foreground.title": { "zh-CN": "后台常驻", en: "Background service" },

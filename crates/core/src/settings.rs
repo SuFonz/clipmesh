@@ -1,9 +1,9 @@
 //! User settings, persisted as `settings.json`.
 //!
 //! One struct serves both platforms. The desktop-only and Android-only fields
-//! (`start_minimized`, `launch_at_login`, `android_foreground_service`) are
-//! simply ignored by the platform they do not apply to, which keeps a single
-//! settings file and a single IPC contract instead of two divergent ones.
+//! (`start_minimized`, `android_foreground_service`) are simply ignored by the
+//! platform they do not apply to, which keeps a single settings file and a
+//! single IPC contract instead of two divergent ones.
 
 use std::path::Path;
 
@@ -96,8 +96,6 @@ pub struct Settings {
     pub max_image_bytes: u64,
     /// Desktop: start hidden in the tray.
     pub start_minimized: bool,
-    /// Desktop: launch when the user logs in.
-    pub launch_at_login: bool,
     /// Android: keep the foreground service running.
     pub android_foreground_service: bool,
     /// How many clipboard entries to keep.
@@ -115,7 +113,6 @@ impl Default for Settings {
             sync_images: true,
             max_image_bytes: MAX_IMAGE_BYTES,
             start_minimized: false,
-            launch_at_login: false,
             android_foreground_service: true,
             history_capacity: crate::sync::DEFAULT_HISTORY_CAPACITY,
             language: Language::System,
@@ -180,9 +177,6 @@ impl Settings {
         }
         if let Some(value) = patch.start_minimized {
             self.start_minimized = value;
-        }
-        if let Some(value) = patch.launch_at_login {
-            self.launch_at_login = value;
         }
         if let Some(value) = patch.android_foreground_service {
             self.android_foreground_service = value;
@@ -250,8 +244,6 @@ pub struct SettingsPatch {
     pub max_image_bytes: Option<u64>,
     /// Desktop: start hidden.
     pub start_minimized: Option<bool>,
-    /// Desktop: launch at login.
-    pub launch_at_login: Option<bool>,
     /// Android: keep the foreground service.
     pub android_foreground_service: Option<bool>,
     /// New history capacity.
@@ -270,7 +262,6 @@ impl SettingsPatch {
             && self.sync_images.is_none()
             && self.max_image_bytes.is_none()
             && self.start_minimized.is_none()
-            && self.launch_at_login.is_none()
             && self.android_foreground_service.is_none()
             && self.history_capacity.is_none()
             && self.language.is_none()
@@ -392,6 +383,29 @@ mod tests {
         assert_eq!(settings.history_capacity, MAX_HISTORY_CAPACITY);
         // Fields absent from the file keep their defaults.
         assert!(settings.auto_sync);
+    }
+
+    #[test]
+    fn a_file_from_a_build_with_launch_at_login_still_loads() {
+        // `launchAtLogin` no longer exists on `Settings`. Serde ignores keys it
+        // does not know, so a settings.json written by an older build keeps
+        // loading — extra keys must not fail the whole file.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"launchAtLogin": true, "startMinimized": true, "autoSync": false}"#,
+        )
+        .unwrap();
+
+        let settings = Settings::load(&path).unwrap();
+        assert!(settings.start_minimized);
+        assert!(!settings.auto_sync);
+
+        // A stale client sending the removed key changes nothing either: the
+        // patch has no field left to land in.
+        let stale: SettingsPatch = serde_json::from_str(r#"{"launchAtLogin": true}"#).unwrap();
+        assert!(stale.is_empty());
     }
 
     #[test]

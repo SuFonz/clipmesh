@@ -34,7 +34,6 @@ export const useSettingsStore = defineStore("settings", () => {
   const syncImages = computed<boolean>(() => settings.value?.syncImages ?? false);
   const maxImageBytes = computed<number>(() => settings.value?.maxImageBytes ?? 0);
   const startMinimized = computed<boolean>(() => settings.value?.startMinimized ?? false);
-  const launchAtLogin = computed<boolean>(() => settings.value?.launchAtLogin ?? false);
   const androidForegroundService = computed<boolean>(
     () => settings.value?.androidForegroundService ?? false,
   );
@@ -127,7 +126,6 @@ export const useSettingsStore = defineStore("settings", () => {
     syncImages,
     maxImageBytes,
     startMinimized,
-    launchAtLogin,
     androidForegroundService,
     language,
     setSettings,

@@ -12,8 +12,8 @@
 //! * **Desktop chrome** - [`tray`] and the window close behaviour.
 //!
 //! Rust does the work: clipboard watching, TCP, TLS, mDNS, identity. Tauri
-//! supplies the window, the tray, settings and autostart, and the Vue frontend
-//! renders whatever the engine publishes.
+//! supplies the window, the tray and settings, and the Vue frontend renders
+//! whatever the engine publishes.
 
 #![warn(missing_docs)]
 

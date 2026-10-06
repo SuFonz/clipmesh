@@ -147,11 +147,6 @@ function onLanguage(event: Event): void {
             :description="t('settings.startMinimized.description')"
             @update:model-value="(v: boolean) => patch({ startMinimized: v })"
           />
-          <AppToggle
-            :model-value="settingsStore.settings?.launchAtLogin ?? false"
-            :label="t('settings.launchAtLogin.label')"
-            @update:model-value="(v: boolean) => patch({ launchAtLogin: v })"
-          />
         </div>
       </AppCard>
     </div>

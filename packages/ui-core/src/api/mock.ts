@@ -300,7 +300,6 @@ function initialState(): MockState {
       syncImages: true,
       maxImageBytes: 8 * 1024 * 1024,
       startMinimized: false,
-      launchAtLogin: true,
       androidForegroundService: platform === "android",
       language: "system",
     },
@@ -657,7 +656,6 @@ function patchOf(value: unknown): Partial<SettingsView> {
   if (typeof raw.syncImages === "boolean") patch.syncImages = raw.syncImages;
   if (typeof raw.maxImageBytes === "number") patch.maxImageBytes = raw.maxImageBytes;
   if (typeof raw.startMinimized === "boolean") patch.startMinimized = raw.startMinimized;
-  if (typeof raw.launchAtLogin === "boolean") patch.launchAtLogin = raw.launchAtLogin;
   if (typeof raw.androidForegroundService === "boolean") {
     patch.androidForegroundService = raw.androidForegroundService;
   }
