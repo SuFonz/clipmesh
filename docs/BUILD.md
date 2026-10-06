@@ -45,8 +45,7 @@ cargo fetch            # optional: warm the crates cache
 ### Development
 
 ```bash
-cd apps/desktop
-npm run dev                # = tauri dev
+npm run dev:desktop        # = tauri dev
 ```
 
 Tauri will:
@@ -57,7 +56,7 @@ Tauri will:
 ### Frontend only (no Rust compile)
 
 ```bash
-npm --prefix apps/desktop/ui run dev
+npm run dev:desktop:ui
 ```
 
 Open <http://localhost:1420> in a browser. When `__TAURI_INTERNALS__` is not detected,
@@ -67,11 +66,11 @@ serving three sample devices, history and fake events that change on their own. 
 ### Packaging
 
 ```bash
-npm --prefix apps/desktop/ui run build     # ui/dist has to be generated first
-cd apps/desktop && npm run build           # = tauri build
+npm run build:desktop:ui     # ui/dist has to be generated first
+npm run build:desktop        # = tauri build
 ```
 
-The artifacts land in `apps/desktop/src-tauri/target/release/bundle/`.
+The artifacts land in the workspace target directory at the repo root: `target/release/bundle/`.
 
 > `tauri.conf.json`'s `frontendDist` is `../ui/dist`,
 > i.e. `apps/desktop/ui/dist`. `tauri::generate_context!()` reads that directory at compile time,
@@ -81,7 +80,7 @@ The artifacts land in `apps/desktop/src-tauri/target/release/bundle/`.
 ### Development logging
 
 ```bash
-CLIPMESH_LOG=debug npm run dev        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
+CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
 ```
 
 ---
@@ -93,7 +92,7 @@ CLIPMESH_LOG=debug npm run dev        # Windows PowerShell: $env:CLIPMESH_LOG="d
 ```powershell
 $env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # or the jbr bundled with Android Studio
 $env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
-$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\26.1.10909125"
+$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 ```
 
 Tauri also reads `TAURI_ANDROID_PROJECT_PATH` (defaults to `src-tauri/gen/android`).
@@ -146,9 +145,8 @@ The plugin's `AndroidManifest.xml` uses the manifest merger to merge its permiss
 ### 4.4 Running and packaging
 
 ```bash
-cd apps/android
-npm run dev            # = tauri android dev
-npm run build          # = tauri android build  ->  APK / AAB
+npm run dev:android    # = tauri android dev
+npm run build:android  # = tauri android build  ->  APK / AAB
 ```
 
 ### 4.5 How the frontend talks to Kotlin
@@ -228,6 +226,8 @@ The Kotlin class name and package name are in the
 | `device.crt` | self-signed X.509 certificate (PEM) |
 | `trusted_devices.json` | paired devices: certificate + fingerprint + public key |
 | `settings.json` | user settings |
+| `history.json` | persisted clipboard history (the capacity is `historyCapacity` in the settings) |
+| `images/` | PNG pixels of history images, one file per entry (`images/<id>.png`) |
 
 **Re-pairing**: just delete `trusted_devices.json` (or delete it on both devices).
 **Full reset**: delete the whole directory — note that this generates a new identity and invalidates every old pairing.
@@ -238,7 +238,7 @@ The Kotlin class name and package name are in the
 
 | Symptom | Cause / what to do |
 | --- | --- |
-| `The frontendDist configuration is set to ../ui/dist but this path doesn't exist` | Run `npm --prefix apps/desktop/ui run build` first |
+| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | Run `npm run build:desktop:ui` first |
 | `Could not automatically determine the process-level CryptoProvider` | `rustls`'s `default-features` was turned on, which enables ring and aws-lc-rs at the same time. See §1 |
 | Devices cannot discover each other | Check whether the firewall allows UDP 5353 (mDNS) and TCP 47711; some corporate Wi-Fi networks disable multicast |
 | Port 47711 is already in use | Normal: it falls back to an ephemeral port and advertises the real port over mDNS |
@@ -335,9 +335,9 @@ cargo clean -p clipmesh-desktop
 
 ### After changing icons, rebuild — do not just look at the old exe
 
-`apps/desktop/src-tauri/target/` holds **stale build artifacts** left over from before the directory refactor;
-the `clipmesh.exe` in there still uses the original Tauri template icon.
-The real artifact is under the repo root's `target/`, so do not double-click the wrong one.
+The desktop executable is built to `target/release/clipmesh-desktop.exe` under the repo root — the
+workspace target directory, not `apps/desktop/src-tauri/target/`. An exe left over from an earlier
+build still carries the old icon, so rebuild rather than double-clicking a stale one.
 
 ---
 

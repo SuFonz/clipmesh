@@ -2,9 +2,11 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**Secure cross-device clipboard sync** — no central server, direct P2P, end-to-end TLS encryption.
+<p align="center">
+  <img src="icon.png" alt="ClipMesh" width="160" />
+</p>
 
-Windows · Linux · macOS · Android
+**Secure cross-device clipboard sync** — no central server, direct P2P, end-to-end TLS encryption.
 
 ---
 
@@ -27,6 +29,19 @@ devices.
                 No server. No third party.
 ```
 
+## Screenshots
+
+> Screenshots are on the way.
+
+<!--
+  To add one, drop the image under docs/ and uncomment:
+
+  <p align="center">
+    <img src="docs/desktop-home.png" alt="Desktop - home" width="720" />
+  </p>
+-->
+
+
 ## Core features
 
 | | |
@@ -36,7 +51,7 @@ devices.
 | 🖥 **Text and image sync** | Images travel as PNG binary chunks, **never base64** |
 | 🔍 **Automatic LAN discovery** | mDNS (`_clipmesh._tcp.local.`), no configuration, no port forwarding |
 | 📋 **Background clipboard watching** | The desktop side watches automatically; Android uses a foreground service plus a notification button |
-| 🧩 **Platform-independent core** | `crates/**` depends on neither Tauri / Vue / Windows API / Android API |
+| 🧩 **Platform-independent core** | `crates/**` (apart from the per-platform `crates/clipboard`) depends on neither Tauri / Vue / Windows API / Android API |
 | 🔁 **Loop prevention** | UUID dedup + echo suppression, so two devices never bounce the same item back at each other |
 
 ## Security model (present in the first version, not "later")
@@ -45,7 +60,7 @@ devices.
 | --- | --- |
 | LAN eavesdropping | TLS 1.3, all traffic encrypted |
 | Man-in-the-middle replacing a device | Certificate fingerprint pinning + the signature is bound to the TLS channel (see below) |
-| Unpaired device reading the clipboard | An unpaired device **can only** send `PairRequest`; every other message is dropped |
+| Unpaired device reading the clipboard | An unpaired device **can only** send pairing messages — `PairRequest`, or the `PairAccept` answering a request this device sent; every other message is dropped |
 | Device identity spoofing | `Hello` must be signed with the private key matching the public key in the certificate |
 | Replay / relay | The signed content includes the TLS exporter secret, so it is valid only on the current connection |
 | Malicious oversized frame exhausting memory | The framing layer checks the 16 MiB limit before allocating |
@@ -61,7 +76,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ```
 clipmesh/
-├── crates/                    # completely platform-agnostic Rust core
+├── crates/                    # Rust core; only clipboard/ is platform-specific
 │   ├── protocol/              # protobuf protocol, framing, payload models
 │   ├── identity/              # Ed25519, self-signed certificates, fingerprints, trust store
 │   ├── security/              # rustls config, certificate policy, channel-binding handshake
@@ -88,9 +103,8 @@ Rust 1.85+ · Node 20+ · (Android additionally needs JDK 17+, the Android SDK a
 
 ```bash
 npm install                       # install frontend dependencies (npm workspaces)
-npm run build                     # build the frontend first (required, see below)
-cd apps/desktop
-npm run dev                       # tauri dev: builds Rust and opens the window
+npm run build:desktop:ui          # build the desktop frontend first (required, see below)
+npm run dev:desktop               # tauri dev: builds Rust and opens the window
 ```
 
 > `tauri.conf.json`'s `frontendDist` points at `apps/desktop/ui/dist`, and
@@ -101,7 +115,7 @@ npm run dev                       # tauri dev: builds Rust and opens the window
 Only want to look at the UI? **You do not need to compile Rust**:
 
 ```bash
-npm --prefix apps/desktop/ui run dev     # http://localhost:1420
+npm run dev:desktop:ui                   # http://localhost:1420
 ```
 
 When no Tauri runtime is detected, the frontend switches to the built-in mock backend by itself,
@@ -111,8 +125,7 @@ showing three sample devices and history, with every interaction clickable. See
 ### Android
 
 ```bash
-cd apps/android
-npm run dev                       # tauri android dev
+npm run dev:android               # tauri android dev
 ```
 
 The full Android build steps (NDK variables, Gradle module wiring) are in [`docs/BUILD.md`](docs/BUILD.md).
@@ -130,7 +143,7 @@ npm run build                     # build the frontend for both apps
 1. Start ClipMesh on both devices.
 2. Within a few seconds they discover each other (the other one shows up in the device list).
 3. On either one, click "Pair".
-4. **The other one pops up a dialog showing the device name, platform and certificate fingerprint.**
+4. **The other one shows a "Pairing requests" card in the Devices view, with the device name, platform and certificate fingerprint.**
 5. Compare the fingerprints on both screens; if they match, click "Accept".
 
 Comparing fingerprints is the real security boundary — a signature only proves "the other side holds

@@ -14,7 +14,7 @@ These five are hard constraints; every implementation detail must obey them:
 | # | Invariant | How it is enforced |
 | --- | --- | --- |
 | 1 | **No central server** | No broker, no relay, no account system. Devices discover each other over mDNS and connect over direct TCP. |
-| 2 | **All devices are equal** | There is no client/server role. TLS mutual authentication; both ends listen and both ends connect, and on collision deviceId lexicographic order decides who redials. |
+| 2 | **All devices are equal** | There is no client/server role. TLS mutual authentication; both ends listen and both ends connect, and on collision, deviceId lexicographic order decides who redials. |
 | 3 | **Data only travels between devices** | No payload passes through a third party; credentials, certificates and private keys never leave the local machine. |
 | 4 | **v1 must be encrypted + trusted** | TLS 1.3 mutual authentication + Ed25519 device identity + explicit pairing. There is no "add it later" switch. |
 | 5 | **The Rust Core is platform-independent** | `crates/**` does not depend on Tauri / Vue / Win32 / Android APIs, and compiles and tests on any platform. |
@@ -65,7 +65,8 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 ```
 
 `core` depends only on traits and **not** on the concrete `clipboard` / `network` implementations.
-The concrete arboard, mdns-sd and rustls objects are only created and injected in the wiring code under `apps/*`.
+The concrete arboard, mdns-sd and rustls objects are created behind those trait implementations in
+`crates/clipboard` / `crates/network` (and `crates/security`), and are only wired together in `apps/*`.
 
 The immediate payoff: the engine can be unit-tested with fake providers, and supporting another platform only means implementing three traits.
 
@@ -103,9 +104,9 @@ The private key stays on the local machine only; `publicKey` is used for authent
 
 | File | Responsibility |
 | --- | --- |
-| `src/crypto.rs` | Domain wrapper around signing/verification: `sign_hello` / `verify_hello` / `sign_pair_accept`, with domain-separation prefixes to prevent replay. |
-| `src/tls.rs` | rustls configuration: two policies, `TrustPolicy::Pairing` (accepts unknown devices, used for first-time pairing) and `TrustPolicy::Strict` (accepts only fingerprints from the trust store). Custom `ClientCertVerifier` / `ServerCertVerifier`. |
-| `src/session.rs` | Session state machine `TcpConnected → TlsEstablished → IdentityVerified → Active`, plus TLS channel binding (exporter secret). |
+| `src/crypto.rs` | Domain-separated digests: `hello_signing_input` / `hello_ack_signing_input` / `pair_accept_signing_input`, built by `domain_digest` with a domain prefix and a length prefix per part, so no field can be shifted into another and a signature made for one purpose cannot be replayed as another. |
+| `src/tls.rs` | rustls configuration: two policies, `TrustPolicy::AcceptUnknown` (accepts any well-formed ClipMesh device certificate, used by the listener and for a first-time pairing) and `TrustPolicy::Pinned` (accepts only a certificate pinned in the trust store, optionally for one specific device). Custom `ClientCertVerifier` / `ServerCertVerifier`. |
+| `src/session.rs` | Session state machine `TcpConnected → TlsEstablished → IdentityVerified → Active`, plus TLS channel binding (exporter secret) and the handshake builders/verifiers: `build_hello` / `verify_hello` / `build_hello_ack` / `verify_hello_ack` / `build_pair_accept` / `verify_pair_accept`. |
 
 ### 3.4 `crates/core` — sync engine
 
@@ -121,11 +122,11 @@ The private key stays on the local machine only; `publicKey` is used for authent
 
 | File | Responsibility |
 | --- | --- |
-| `src/discovery.rs` | mDNS advertise and browse (`_clipmesh._tcp.local.`); TXT records carry `deviceId` / `name` / `platform` / `port` / `fp`. |
+| `src/discovery.rs` | mDNS advertise and browse (`_clipmesh._tcp.local.`); TXT records carry `id` / `name` / `platform` / `version` / `fp` (the port comes from the service record, not from a TXT key). |
 | `src/tcp.rs` | Listening and connecting, port selection and conflict retry. |
 | `src/tls.rs` | Assembles `TlsAcceptor` / `TlsConnector` from identity + security. |
 | `src/connection.rs` | Read/write tasks for a single session, handshake, heartbeat, image chunk send/receive. |
-| `src/packet.rs` | Message routing and ACK within a session. |
+| `src/packet.rs` | Session-level message classification: handshake / keepalive / peer error / payload. |
 
 ### 3.6 `crates/clipboard` — platform clipboard
 
@@ -144,7 +145,7 @@ so `clipmesh-clipboard` stays platform-independent and can still be compiled on 
 | --- | --- |
 | Eavesdropping on the LAN | TLS 1.3, all traffic encrypted. |
 | Man-in-the-middle replacing a device | Certificate fingerprint pinning + an application-layer signature challenge bound to the TLS channel (see 4.3). |
-| Unauthorized device reading the clipboard | By default only sessions from devices in the trust store are accepted; an unpaired device can only send `PairRequest`. |
+| Unauthorised device reading the clipboard | By default only sessions from devices in the trust store are accepted; an unpaired device can only send `PairRequest`. |
 | Device identity spoofing | Identity = the Ed25519 public key, `Hello` must be signed with the matching private key, and the signature is bound to the current TLS channel. |
 | Replaying old messages | Every payload carries a UUID and the receiver drops duplicates with `DedupCache`; the handshake challenge is a one-time 32-byte random value. |
 | Malicious oversized frame exhausting memory | The framing layer checks the 16 MiB cap (`MAX_FRAME_BYTES`) before allocating. |
@@ -155,7 +156,7 @@ so `clipmesh-clipboard` stays platform-independent and can still be compiled on 
 ```
 A discovers B (mDNS)
   ↓
-A establishes TCP + TLS (the Pairing policy is used here: unknown certificates are accepted, but the fingerprint is recorded)
+A establishes TCP + TLS (the `TrustPolicy::AcceptUnknown` policy is used here: unknown certificates are accepted, but the fingerprint is recorded)
   ↓
 A → PairRequest { deviceId, name, platform, publicKey, certificate, fingerprint, nonce }
   ↓
@@ -176,10 +177,15 @@ rather than being forged by a third party on the LAN.
 During the handshake each side generates a 32-byte `challenge`, and the signed content is:
 
 ```
-sha256( "clipmesh-hello-v1" ‖ challenge ‖ channel_binding )
+sha256( u32(len("clipmesh-hello-v1")) ‖ "clipmesh-hello-v1"
+      ‖ u32(len(challenge))          ‖ challenge
+      ‖ u32(len(channel_binding))    ‖ channel_binding )
 ```
 
-where `channel_binding = TLS exporter secret` (`export_keying_material(b"EXPORTER-clipmesh-identity")`).
+where `u32(x)` is the byte length of `x` as a 4-byte big-endian integer. Every part carries its own length,
+so bytes cannot be shifted from one field into the next (`domain_digest` in `crates/security/src/crypto.rs`);
+the domain prefix is what stops a `Hello` signature from being replayed as a `HelloAck` or a `PairAccept`.
+`channel_binding = TLS exporter secret` (`export_keying_material(b"EXPORTER-clipmesh-identity")`).
 Only the two ends of this TLS connection can compute the exporter secret, so an attacker cannot forward A's `Hello`
 verbatim onto another connection and impersonate A there — this blocks the whole class of "TCP-layer relay" attacks.
 
@@ -199,7 +205,9 @@ Establish the Session (write into the connection table, start delivering payload
 Transfer data
 ```
 
-Failure at any step → send an `ErrorMessage` and close the connection; never downgrade to plaintext.
+Failure at any step → close the connection; never downgrade to plaintext. A peer that has something to explain
+sends an `ErrorMessage`, which the session logs and the engine turns into a `clipmesh://error` event — but a failed
+handshake itself just drops the connection.
 
 ---
 
@@ -244,7 +252,7 @@ UI event clipmesh://clipboard-received { item }
 
 ### 5.3 Loop prevention
 
-Two devices that both have auto-sync on will bounce the same item back at each other. Three layers of protection:
+Two devices that both have auto-sync on will bounce the same item back and forth. Three layers of protection:
 
 1. **id dedup**: the origin generates a UUID, and no device processes it a second time (`DedupCache`).
 2. **Echo suppression**: before writing to the local clipboard, the content signature (kind + len + sha256) is recorded;
@@ -291,7 +299,7 @@ Android's background restrictions require the resident capabilities to live in a
 Vue → Tauri → Rust → Android Native Plugin → Android API
 ```
 
-The plugin has three parts (`apps/android/plugins/bridge/`):
+The plugin has four parts (`apps/android/plugins/bridge/`):
 
 | Directory | Responsibility |
 | --- | --- |
@@ -356,7 +364,7 @@ clipmesh/
 │   └── android/
 │       ├── src-tauri/         # mobile Tauri host
 │       ├── ui/                # mobile layout
-│       └── plugins/bridge/{clipboard,notification,foregroundservice}
+│       └── plugins/bridge/{clipboard,notification,foregroundservice,broadcast}
 └── docs/
 ```
 
@@ -373,10 +381,10 @@ clipmesh/
 | Phase | Content | Deliverable |
 | --- | --- | --- |
 | Phase 1 | Architecture design | This document |
-| Phase 2 | protobuf protocol | `crates/protocol` (27 unit tests) |
+| Phase 2 | protobuf protocol | `crates/protocol` (28 unit tests) |
 | Phase 3 | identity + TLS | `crates/identity`, `crates/security` |
 | Phase 4 | Rust Core | `crates/core`, `crates/clipboard` |
 | Phase 5 | mDNS + TCP + TLS | `crates/network` |
 | Phase 6 | Desktop | `apps/desktop` |
 | Phase 7 | Android + Native Plugin | `apps/android` |
-| Phase 8 | Testing / optimization / packaging | `docs/BUILD.md`, CI |
+| Phase 8 | Testing / optimisation / packaging | `docs/BUILD.md`, CI |

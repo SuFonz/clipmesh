@@ -110,6 +110,7 @@ export interface SettingsView {
   startMinimized: boolean;    // desktop: start minimized to the tray
   launchAtLogin: boolean;     // desktop: launch at login
   androidForegroundService: boolean; // Android: keep the foreground service running
+  historyCapacity: number;    // how many clipboard entries to keep (1..=500, 50 by default)
   language: LanguageSetting;  // unknown values degrade to "system" on the Rust side
 }
 
@@ -152,6 +153,7 @@ export interface IdentityView {
 | --- | --- | --- | --- |
 | `start_engine` | — | `StatusView` | Idempotent |
 | `stop_engine` | — | `StatusView` | Idempotent |
+| `clear_error` | — | `StatusView` | Acknowledge the last error so the banner can be dismissed; `lastError` rides on every status snapshot, so clearing it only in the UI would bring it straight back on the next event |
 | `update_settings` | `{ patch: Partial<SettingsView> }` | `SettingsView` | Takes effect immediately and is persisted |
 | `set_device_name` | `{ name: string }` | `IdentityView` | Re-announces over mDNS |
 
@@ -167,15 +169,16 @@ export interface IdentityView {
 
 | Command | Arguments | Returns | Notes |
 | --- | --- | --- | --- |
-| `send_clipboard` | — | `SendResult` | **Read the current system clipboard and broadcast it** (the Android notification's "broadcast clipboard" button goes through this one) |
+| `send_clipboard` | — | `SendResult` | **Read the current system clipboard and broadcast it** (the desktop tray item and the Android UI's broadcast button go through this one; the notification's broadcast button does not — a transparent Activity reads the clipboard and hands it to the engine's explicit send) |
 | `send_text` | `{ content: string }` | `SendResult` | Broadcast the given text directly |
 | `resend_history_item` | `{ id: string }` | `SendResult` | Send a history entry again |
 | `copy_history_item` | `{ id: string }` | `void` | Write to the local clipboard only, without sending |
 | `clear_history` | — | `void` | |
 | `get_image_thumbnail` | `{ id: string, maxSize: number }` | `string` | Returns a **data URL**, already downscaled. The pixels come from this machine's `<state>/images/<id>.png` copy and have nothing to do with what is currently on the clipboard |
 
-> `get_image_thumbnail` is the only place in this project that uses base64, and it only serves local UI thumbnails.
-> Images on the wire are always raw PNG binary chunks (see `crates/protocol/src/frame.rs`).
+> `get_image_thumbnail` is the only command that returns base64, and it only serves local UI thumbnails.
+> Images on the wire are always raw PNG binary chunks (see `crates/protocol/src/frame.rs`); elsewhere base64
+> only appears at platform boundaries (PEM certificates, the Android JNI bridge).
 
 ### Android-only
 
@@ -186,8 +189,14 @@ export interface IdentityView {
 | `android_service_running` | — | `boolean` | |
 | `android_notification_permission` | — | `boolean` | Only **queries** the Android 13+ notification permission, shows no dialog |
 | `android_request_notification_permission` | — | `boolean` | Android 13+ notification permission, shows the system dialog |
+| `android_leave_app` | — | `void` | Send the app to the back of the task stack after a visible broadcast; the Rust host does the same on its own fallback path, and this is the command for a UI that wants to leave on purpose |
+| `android_push_clipboard` | `{ payload: { kind: "text", text: string } \| { kind: "image", png: string, width: number, height: number } \| { kind: "empty" } }` | `void` | Record clipboard content Kotlin read: it reports a **change**, not an explicit send, so the engine drops it while `autoSync` is off. No caller in the UI today |
+| `android_report_error` | `{ message: string }` | `void` | Report a platform failure so it reaches the UI as a normal `clipmesh://error` event |
 
-Calling these commands on a non-Android platform throws `"android commands are only available on Android"`.
+These commands exist only in the Android build. The desktop build registers stubs for `android_start_service`,
+`android_stop_service`, `android_service_running` and `android_request_notification_permission`, which throw
+`"android commands are only available on Android"`; the rest are not registered there at all, so `invoke` fails
+with Tauri's "command not found" instead.
 
 ---
 
@@ -201,7 +210,7 @@ The frontend only has to mount `useCoreEvents()` once in `App.vue`; it writes ev
 | `clipmesh://peers` | `PeerView[]` | A device appeared, disappeared or changed connection state |
 | `clipmesh://trusted` | `TrustedDeviceView[]` | The trust list changed |
 | `clipmesh://pairing-requests` | `PairingPrompt[]` | Someone asked to pair, or a request was handled |
-| `clipmesh://history` | `ClipboardItemView[]` | The history changed (at most 50 entries, newest first) |
+| `clipmesh://history` | `ClipboardItemView[]` | The history changed (newest first, at most `historyCapacity` entries — 50 by default, 500 at most) |
 | `clipmesh://clipboard-received` | `ClipboardItemView` | A remote clipboard item arrived and was written locally |
 | `clipmesh://clipboard-sent` | `{ item: ClipboardItemView, delivered: number }` | Local content was pushed |
 | `clipmesh://error` | `string` | A non-fatal error, for a toast |
@@ -217,9 +226,9 @@ The two apps do **not** share a layout; each one implements its own:
 | | Desktop (`apps/desktop/ui`) | Android (`apps/android/ui`) |
 | --- | --- | --- |
 | Layout | Side navigation + multiple columns | Bottom tab bar + single column |
-| Interaction | Hover, right-click, keyboard shortcuts | Large buttons, touch targets ≥48px |
-| Views | Dashboard / Devices / History / Settings / Pairing | Home / Devices / History / Settings |
-| Special | System tray, window controls | Foreground-service toggle, broadcast button, notification permission |
+| Interaction | Hover and text selection; the WebView2 right-click menu is suppressed outside editable fields | Large buttons, touch targets ≥48px |
+| Views | Home / Devices / History / Settings / About | Home / Devices / History / Settings |
+| Special | System tray, status bar | Foreground-service toggle, broadcast button, notification permission |
 
 How the choice is made: `useDeviceType()` returns `"desktop" | "mobile"` from `platform` and the window width,
 but **each app statically mounts its own Layout**; there is no runtime either/or, so both layouts never end up in one bundle.

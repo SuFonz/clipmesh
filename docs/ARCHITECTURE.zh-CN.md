@@ -15,8 +15,8 @@
 | --- | --- | --- |
 | 1 | **无中心服务器** | 没有 broker、没有中转、没有账号体系。设备通过 mDNS 互相发现，直连 TCP。 |
 | 2 | **所有设备平等** | 没有 client/server 角色。TLS 双向认证，两端都既是监听方也是连接方，冲突时用 deviceId 字典序决定谁主动重连。 |
-| 3 | **数据只在设备间传输** | 任何 payload 不经过第三方；凭据、证书、私钥永不离开本机。 |
-| 4 | **第一版必须加密 + 信任** | TLS 1.3 双向认证 + Ed25519 设备身份 + 显式配对。没有"以后再加"的开关。 |
+| 3 | **数据只在设备间传输** | 任何 payload 都不经过第三方；凭据、证书、私钥永不离开本机。 |
+| 4 | **第一版必须加密 + 信任** | TLS 1.3 双向认证 + Ed25519 设备身份 + 显式配对。没有“以后再加”的开关。 |
 | 5 | **Rust Core 与平台无关** | `crates/**` 不依赖 Tauri / Vue / Win32 / Android API，可在任意平台编译和测试。 |
 
 ---
@@ -63,7 +63,8 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 ```
 
 `core` 只依赖 trait，**不依赖** `clipboard` / `network` 的具体实现。
-具体的 arboard、mdns-sd、rustls 只在 `apps/*` 的组装代码里被 new 出来并注入。
+具体的 arboard、mdns-sd、rustls 对象都是在这些 trait 的实现背后创建的，也就是
+`crates/clipboard` / `crates/network`（以及 `crates/security`），只在 `apps/*` 里被组装到一起。
 
 这样做的直接收益：引擎可以用假 provider 做单元测试，且换一个平台只需要实现三个 trait。
 
@@ -83,7 +84,7 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 | `src/device.rs` | `DeviceId`(UUIDv4) / `Platform` / `DeviceInfo`。 |
 
 **为什么 payload 模型放在 protocol 而不是 core**：它是线上格式的 Rust 视图，
-把它和 protobuf 放在一起，才能保证"改协议"和"改类型"永远发生在同一次提交里。
+把它和 protobuf 放在一起，才能保证“改协议”和“改类型”永远发生在同一次提交里。
 
 ### 3.2 `crates/identity` — 设备身份
 
@@ -101,9 +102,9 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/crypto.rs` | 签名/验签的领域封装：`sign_hello` / `verify_hello` / `sign_pair_accept`，域分隔前缀防重放。 |
-| `src/tls.rs` | rustls 配置：两种策略 `TrustPolicy::Pairing`（接受未知设备，用于首次配对）与 `TrustPolicy::Strict`（只接受信任库内的指纹）。自定义 `ClientCertVerifier` / `ServerCertVerifier`。 |
-| `src/session.rs` | 会话状态机 `TcpConnected → TlsEstablished → IdentityVerified → Active`，以及 TLS 通道绑定（exporter secret）。 |
+| `src/crypto.rs` | 域分隔摘要：`hello_signing_input` / `hello_ack_signing_input` / `pair_accept_signing_input`，由 `domain_digest` 构造，带域前缀、每个部分带自己的长度前缀，字段之间没法互相挪位，为一个用途签的名也不能当另一个用途重放。 |
+| `src/tls.rs` | rustls 配置：两种策略 `TrustPolicy::AcceptUnknown`（接受任何格式正确的 ClipMesh 设备证书，监听方和首次配对用它）与 `TrustPolicy::Pinned`（只接受信任库里固定过的证书，可以只针对某一台设备）。自定义 `ClientCertVerifier` / `ServerCertVerifier`。 |
+| `src/session.rs` | 会话状态机 `TcpConnected → TlsEstablished → IdentityVerified → Active`，加上 TLS 通道绑定（exporter secret），以及握手报文的构造与校验：`build_hello` / `verify_hello` / `build_hello_ack` / `verify_hello_ack` / `build_pair_accept` / `verify_pair_accept`。 |
 
 ### 3.4 `crates/core` — 同步引擎
 
@@ -119,18 +120,18 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/discovery.rs` | mDNS 广播与浏览（`_clipmesh._tcp.local.`），TXT 记录携带 `deviceId` / `name` / `platform` / `port` / `fp`。 |
+| `src/discovery.rs` | mDNS 广播与浏览（`_clipmesh._tcp.local.`），TXT 记录携带 `id` / `name` / `platform` / `version` / `fp`（端口来自服务记录，不是 TXT 键）。 |
 | `src/tcp.rs` | 监听与连接，端口选择与冲突重试。 |
 | `src/tls.rs` | 用 identity + security 组装 `TlsAcceptor` / `TlsConnector`。 |
 | `src/connection.rs` | 单条会话的读写任务、握手、心跳、图片分片收发。 |
-| `src/packet.rs` | 会话内的消息路由与 ACK。 |
+| `src/packet.rs` | 会话内的消息分类：握手 / 保活 / 对端错误 / payload。 |
 
 ### 3.6 `crates/clipboard` — 平台剪贴板
 
 `ClipboardProvider` 的各平台实现：`windows.rs` / `linux.rs` / `macos.rs` / `android.rs`。
 桌面统一走 `arboard`（文本 + 图片），Windows 额外用 `GetClipboardSequenceNumber` 做廉价变更检测。
 Android 不直接调用系统 API，而是通过注入的 `AndroidClipboardHost` 把请求转给 Kotlin 插件——
-这样 `clipmesh-clipboard` 依然与平台无关，可以被桌面编译。
+这样 `clipmesh-clipboard` 依然与平台无关，在桌面端也能编译。
 
 ---
 
@@ -153,7 +154,7 @@ Android 不直接调用系统 API，而是通过注入的 `AndroidClipboardHost`
 ```
 A 发现 B (mDNS)
   ↓
-A 建立 TCP + TLS（此时用 Pairing 策略：接受未知证书，但记录指纹）
+A 建立 TCP + TLS（此时用 `TrustPolicy::AcceptUnknown` 策略：接受未知证书，但记录指纹）
   ↓
 A → PairRequest { deviceId, name, platform, publicKey, certificate, fingerprint, nonce }
   ↓
@@ -166,19 +167,24 @@ B 接受 → PairAccept { ..., signature = sign(nonce ‖ B.deviceId) }
 ```
 
 指纹的**带外比对**（两块屏幕对照）才是真正的安全边界；
-签名只是保证"接受"这个动作确实来自持有该私钥的设备，而不是被局域网里的第三方伪造。
+签名只是保证“接受”这个动作确实来自持有该私钥的设备，而不是被局域网里的第三方伪造。
 
 ### 4.3 通道绑定（防中继）
 
 握手时双方各自生成 32 字节 `challenge`，签名内容为：
 
 ```
-sha256( "clipmesh-hello-v1" ‖ challenge ‖ channel_binding )
+sha256( u32(len("clipmesh-hello-v1")) ‖ "clipmesh-hello-v1"
+      ‖ u32(len(challenge))          ‖ challenge
+      ‖ u32(len(channel_binding))    ‖ channel_binding )
 ```
 
-其中 `channel_binding = TLS exporter secret`（`export_keying_material(b"EXPORTER-clipmesh-identity")`）。
+其中 `u32(x)` 是 `x` 的字节长度，写成 4 字节大端整数。每个部分都带自己的长度，
+字节就没法从一个字段挪进下一个字段（`domain_digest`，见 `crates/security/src/crypto.rs`）；
+域前缀则挡住把 `Hello` 的签名当成 `HelloAck` 或 `PairAccept` 重放。
+`channel_binding = TLS exporter secret`（`export_keying_material(b"EXPORTER-clipmesh-identity")`）。
 exporter secret 只有这条 TLS 连接的两端能算出，因此攻击者无法把 A 的 `Hello`
-原样转发到另一条连接上冒充 A —— 这挡住了"TCP 层中继"这一整类攻击。
+原样转发到另一条连接上冒充 A —— 这挡住了“TCP 层中继”这一整类攻击。
 
 ### 4.4 连接状态机
 
@@ -196,7 +202,8 @@ Device Identity 验证（Hello 签名 + 通道绑定）
 传输数据
 ```
 
-任何一步失败 → 发送 `ErrorMessage` 并关闭连接，绝不降级为明文。
+任何一步失败 → 关闭连接，绝不降级为明文。对端若还有话要说，会发一条 `ErrorMessage`，
+会话把它记下来，引擎再变成 `clipmesh://error` 事件——但握手本身失败就是直接断连。
 
 ---
 
@@ -241,7 +248,7 @@ UI 事件 clipmesh://clipboard-received { item }
 
 ### 5.3 防环说明
 
-两个都开着自动同步的设备会互相回弹同一条内容。三重防护：
+两台都开着自动同步的设备会互相回弹同一条内容。三重防护：
 
 1. **id 去重**：Origin 生成 UUID，任何设备处理过一次就不再处理（`DedupCache`）。
 2. **回声抑制**：写入本机剪贴板前记录内容签名（kind + len + sha256），
@@ -253,11 +260,11 @@ UI 事件 clipmesh://clipboard-received { item }
 payload 直接广播给**每一个已连接且已信任**的设备，不做存储转发、不做多跳中继。
 
 理由：局域网内每台设备都通过 mDNS 发现其他所有设备，A→C 的直连一定存在，
-中继只会在"某些设备之间连不上"时才有意义（那是跨网段场景，v1 不在范围内）；
-而一旦引入中继，"这条 payload 是谁转发的、能不能信"就变成一个需要重新论证的问题。
+中继只会在“某些设备之间连不上”时才有意义（那是跨网段场景，v1 不在范围内）；
+而一旦引入中继，“这条 payload 是谁转发的、能不能信”就变成一个需要重新论证的问题。
 
-代价是三台设备时会产生 A→B、A→C 两条连接而不是一条链，
-在局域网上这比中继更快也更简单。`DedupCache` 依然必需 ——
+代价是三台设备时会产生 A→B、A→C 两条连接而不是一条链；
+在局域网上，这比中继更快也更简单。`DedupCache` 依然必需 ——
 对端把我们的 payload 回弹回来是真实存在的失败模式。
 
 ### 5.5 谁主动连接
@@ -288,13 +295,13 @@ Android 的后台限制要求把常驻能力放进原生插件：
 Vue → Tauri → Rust → Android Native Plugin → Android API
 ```
 
-插件三块（`apps/android/plugins/bridge/`）：
+插件四块（`apps/android/plugins/bridge/`）：
 
 | 目录 | 职责 |
 | --- | --- |
 | `foregroundservice/` | 常驻前台服务，维持进程与网络会话；通知栏常驻，带「广播剪贴板」按钮。 |
 | `notification/` | 通知的构造与投递：常驻服务通知与「收到剪贴板」通知。 |
-| `broadcast/` | 透明 Activity 与进程级 handoff：通知按钮把剪贴板读出来交给 Rust，界面不出现；读不到时回退到可见路径。 |
+| `broadcast/` | 透明 Activity 与进程级 handoff：通知按钮把剪贴板读出来交给 Rust，界面不会出现；读不到时回退到可见路径。 |
 | `clipboard/` | `ClipboardManager` 读写；Android 10+ 后台读剪贴板受限，因此广播由用户点击通知按钮**主动触发**。 |
 
 Android 上 Rust 不直接调 `ClipboardManager`，而是通过 `AndroidClipboardHost` trait
@@ -302,7 +309,7 @@ Android 上 Rust 不直接调 `ClipboardManager`，而是通过 `AndroidClipboar
 
 ### 6.3 界面语言（`packages/ui-core/src/i18n/`）
 
-界面支持 `zh-CN` / `en` 两种语言。**没有引 i18n 库**：整个界面只需要「两张表 + 一个查表函数」，
+界面支持 `zh-CN` / `en` 两种语言。**没有引入 i18n 库**：整个界面只需要「两张表 + 一个查表函数」，
 手写一份比拉 vue-i18n 进来更小、更可控。
 
 ```
@@ -324,7 +331,7 @@ settings.json ──language──▶ Settings（Rust）──get_settings──
    每条文案在同一个对象字面量里给出两种语言，**漏一个就是编译错误**；
    `t()` 只接受 `MessageKey`，所以拼错的键同样是编译错误，而不是运行时空白。
 4. **切换是实时的**：`locale` 是一个 `computed`，`t()` 在模板 / `computed` 里读它，
-   语言一变相关片段自动重渲染，不需要刷新。
+   语言一变，相关片段自动重渲染，不需要刷新。
 
 约定：**新增任何用户可见文字都必须写进文案表**，不要在组件里留字面量。
 代码注释保持中文（仓库惯例），`console.*` / `tracing` 这类开发者诊断不翻译。
@@ -352,15 +359,15 @@ clipmesh/
 │   └── android/
 │       ├── src-tauri/         # 移动 Tauri 宿主
 │       ├── ui/                # 移动布局
-│       └── plugins/bridge/{clipboard,notification,foregroundservice}
+│       └── plugins/bridge/{clipboard,notification,foregroundservice,broadcast}
 └── docs/
 ```
 
 > 与 `doc.txt` 的两点差异，均为 Tauri 2 的实际约束：
-> 1. `packages/ui-core/` 是为了让两端"共享数据模型/状态管理/API/通用组件"而不用复制代码；
+> 1. `packages/ui-core/` 是为了让两端“共享数据模型/状态管理/API/通用组件”，而不用复制代码；
 >    两个 app 各自保留 `layouts/` 与 `views/`，因为两套布局本来就不一样。
 > 2. Android 端 `gen/android` 由 `tauri android init` 生成并纳入版本库，
->    原生插件以独立 Gradle module 形式被 `settings.gradle` 引入。
+>    原生插件以独立 Gradle module 的形式由 `settings.gradle` 引入。
 
 ---
 
@@ -369,7 +376,7 @@ clipmesh/
 | 阶段 | 内容 | 产物 |
 | --- | --- | --- |
 | Phase 1 | 架构设计 | 本文档 |
-| Phase 2 | protobuf 协议 | `crates/protocol`（27 个单元测试） |
+| Phase 2 | protobuf 协议 | `crates/protocol`（28 个单元测试） |
 | Phase 3 | identity + TLS | `crates/identity`、`crates/security` |
 | Phase 4 | Rust Core | `crates/core`、`crates/clipboard` |
 | Phase 5 | mDNS + TCP + TLS | `crates/network` |

@@ -2,7 +2,7 @@
 
 [English](BUILD.md) | **简体中文**
 
-本文件覆盖：桌面端打包、Android 构建与原生插件接线、以及常见故障排查。
+本文件覆盖：桌面端打包、Android 构建与原生插件接线，以及常见故障排查。
 
 ---
 
@@ -45,19 +45,18 @@ cargo fetch            # 可选：预热 crates 缓存
 ### 开发
 
 ```bash
-cd apps/desktop
-npm run dev                # = tauri dev
+npm run dev:desktop        # = tauri dev
 ```
 
 Tauri 会：
 1. 在 `apps/desktop/` 下执行 `beforeDevCommand`：`npm --prefix ui run dev`（Vite，端口 1420，`strictPort`）
-2. 编译 `apps/desktop/src-tauri`（首次约 3–10 分钟，之后增量）
-3. 打开窗口指向 `http://localhost:1420`
+2. 编译 `apps/desktop/src-tauri`（首次约 3–10 分钟，之后为增量编译）
+3. 打开指向 `http://localhost:1420` 的窗口
 
 ### 只看前端（不编译 Rust）
 
 ```bash
-npm --prefix apps/desktop/ui run dev
+npm run dev:desktop:ui
 ```
 
 浏览器打开 <http://localhost:1420>。检测不到 `__TAURI_INTERNALS__` 时，
@@ -67,11 +66,11 @@ npm --prefix apps/desktop/ui run dev
 ### 打包
 
 ```bash
-npm --prefix apps/desktop/ui run build     # 必须先生成 ui/dist
-cd apps/desktop && npm run build           # = tauri build
+npm run build:desktop:ui     # 必须先生成 ui/dist
+npm run build:desktop        # = tauri build
 ```
 
-产物在 `apps/desktop/src-tauri/target/release/bundle/`。
+产物在仓库根的工作区 target 目录：`target/release/bundle/`。
 
 > `tauri.conf.json` 的 `frontendDist` 是 `../ui/dist`，
 > 即 `apps/desktop/ui/dist`。`tauri::generate_context!()` 在编译期读取该目录，
@@ -81,7 +80,7 @@ cd apps/desktop && npm run build           # = tauri build
 ### 开发日志
 
 ```bash
-CLIPMESH_LOG=debug npm run dev        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
+CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
 ```
 
 ---
@@ -93,7 +92,7 @@ CLIPMESH_LOG=debug npm run dev        # Windows PowerShell: $env:CLIPMESH_LOG="d
 ```powershell
 $env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # 或 Android Studio 自带 jbr
 $env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
-$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\26.1.10909125"
+$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 ```
 
 Tauri 还会读 `TAURI_ANDROID_PROJECT_PATH`（默认 `src-tauri/gen/android`）。
@@ -109,7 +108,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 Kotlin 插件在 `apps/android/plugins/bridge/`，是**独立的 Gradle library 模块**，
 不在 `gen/android` 里 —— 这样重新执行 `tauri android init` 不会覆盖它。
 
-README 之外，接线只有两处，都**已经写入仓库**，此处记录是为了说明为什么：
+除 README 之外，接线只有两处，都**已经写入仓库**，此处记录是为了说明为什么：
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -147,9 +146,8 @@ Service / Receiver 声明合并进应用。
 ### 4.4 运行与打包
 
 ```bash
-cd apps/android
-npm run dev            # = tauri android dev
-npm run build          # = tauri android build  ->  APK / AAB
+npm run dev:android    # = tauri android dev
+npm run build:android  # = tauri android build  ->  APK / AAB
 ```
 
 ### 4.5 前端怎么和 Kotlin 说话
@@ -177,21 +175,21 @@ Rust  broadcast::spawn 轮询 takeBroadcast（前台服务在跑时 500ms，否�
 Rust  engine.send_explicit(content)  → 对端
 ```
 
-通知按钮**不会**再打开可见界面，但 Activity 有三种失败可能，前两种会退回旧行为
+通知按钮**不会**再打开可见界面，但 Activity 有三种失败模式，前两种会退回旧行为
 （把真正的 `MainActivity` 带到前台、广播完再 `moveTaskToBack`）：
 
 | 失败 | 表现 | 处理 |
 | --- | --- | --- |
 | 2 秒内拿不到窗口焦点 | 透明 Activity 已启动 | 回退：`ACTION_BROADCAST` 拉前台，`visible=true` |
 | 拿到焦点但剪贴板读不出内容 | 同上 | 同上 |
-| 通知的 `PendingIntent` 被 ROM 拦下（后台启动 Activity 限制） | 什么都没有发生 | **无法感知、无法补救**：应用侧拿不到任何回调，只能让用户用应用内那颗按钮 |
+| 通知的 `PendingIntent` 被 ROM 拦下（后台启动 Activity 限制） | 什么都没有发生 | **无法感知、无法补救**：应用侧拿不到任何回调，只能让用户用应用内那个按钮 |
 
-回退路径由 Rust 收尾：读剪贴板（重试几次，窗口刚起来时读不到是正常的）、
-`send_explicit`、成功后再 `leaveApp()` 把用户送回原来的应用。
+回退路径由 Rust 收尾：读剪贴板（重试几次，窗口刚起来时读不到是正常的），然后
+`send_explicit`，成功后再 `leaveApp()` 把用户送回原来的应用。
 
-`send_explicit` 而不是 `AndroidClipboardProvider::push`：`push` 发出的是一条"本地剪贴板
-变化"，引擎的 `handle_local_change` 会在 `autoSync` 关闭时把它丢掉 —— 而那正是会手动按
-这颗按钮的用户。
+`send_explicit` 而不是 `AndroidClipboardProvider::push`：`push` 发出的是一条“本地剪贴板
+变化”，引擎的 `handle_local_change` 会在 `autoSync` 关闭时把它丢掉 —— 而会手动按
+这个按钮的，正是这类用户。
 
 Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运行时才报错）：
 
@@ -227,6 +225,8 @@ Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 | `device.crt` | 自签 X.509 证书（PEM） |
 | `trusted_devices.json` | 已配对设备：证书 + 指纹 + 公钥 |
 | `settings.json` | 用户设置 |
+| `history.json` | 持久化的剪贴板历史（容量由设置里的 `historyCapacity` 决定） |
+| `images/` | 历史图片的 PNG 像素，每个条目一个文件（`images/<id>.png`） |
 
 **重新配对**：删掉 `trusted_devices.json`（或两台都删）即可。
 **完全重置**：删掉整个目录 —— 注意这会生成新身份，所有旧配对失效。
@@ -237,7 +237,7 @@ Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| `The frontendDist configuration is set to ../ui/dist but this path doesn't exist` | 先跑 `npm --prefix apps/desktop/ui run build` |
+| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | 先跑 `npm run build:desktop:ui` |
 | `Could not automatically determine the process-level CryptoProvider` | `rustls` 的 `default-features` 被打开了，同时启用了 ring 与 aws-lc-rs。见 §1 |
 | 设备互相发现不了 | 检查防火墙是否放行 UDP 5353（mDNS）与 TCP 47711；某些企业 Wi-Fi 禁用组播 |
 | 端口 47711 被占用 | 正常：会自动改用临时端口并通过 mDNS 广播真实端口 |
@@ -272,13 +272,13 @@ npm run icons
 ### 背景色
 
 Android 自适应图标的背景层是**一个纯色**。`tauri icon` 固定写 `#FFFFFF`，
-对彩色图标会在四周露出一圈白边，所以脚本会重写这个文件：
+对彩色图标来说，四周会露出一圈白边，所以脚本会重写这个文件：
 
 ```
 apps/android/src-tauri/gen/android/app/src/main/res/values/ic_launcher_background.xml
 ```
 
-默认值 `#AABFF5` 是从当前源图四条边的中点采样取平均得到的。换了配色差别大的图之后
+默认值 `#AABFF5` 是从当前源图四条边的中点采样后取平均得到的。换了配色差别大的图之后
 应当重新采样 —— 分别取上下左右四条边中点向内约 40px 处的像素求平均即可：
 
 ```bash
@@ -294,18 +294,18 @@ node scripts/update-icons.mjs --bg '#RRGGBB'
 （上一版源图没有 alpha，圆角是画上去的深色像素，Windows 任务栏里能看到方角 ——
 如果以后又换回不带 alpha 的图，会复现这个问题。）
 
-### ⚠️ 换完图标 exe 还是旧图标？
+### ⚠️ 换完图标，exe 还是旧图标？
 
-这是本项目实际踩过的坑，原因不在图标缓存，在 **cargo 的 build script 缓存**：
+这是本项目实际踩过的坑，原因不在图标缓存，而在 **cargo 的 build script 缓存**：
 
 `tauri-build` 在 Windows 上会生成一份 `resource.rc`，里面用绝对路径指向
 `icons/icon.ico`，再编译进 exe。但它只对 `tauri.conf.json` 和 `capabilities/`
 发 `cargo:rerun-if-changed`，**不为图标发**。
 
 而 cargo 的规则是：**只要 build script 发了任意一条 `rerun-if-changed`，
-"包内文件变了就重跑" 的兜底逻辑就失效**，此后只认那张清单。
+“包内文件变了就重跑”的兜底逻辑就失效**，此后只认那张清单。
 于是 `icons/icon.ico` 对 cargo 完全隐形 —— build.rs 永远不重跑，
-那份指向旧图标的 `resource.rc` 就一直躺在缓存里被链进每一个新 exe，
+那份指向旧图标的 `resource.rc` 就一直躺在缓存里，被链接进每一个新 exe，
 **构建成功、程序正常、图标默默是错的**。
 
 修复方式已经写进两个 `build.rs`（`apps/*/src-tauri/build.rs`）：
@@ -322,7 +322,7 @@ $ico.ToBitmap().Save("$env:TEMP\embedded.png")
 ```
 
 （注意 `ExtractAssociatedIcon` 走的是 shell API，会命中图标缓存。
-要绕开缓存，先把 exe 复制到一个新文件名再提取。）
+要绕开缓存，先把 exe 复制一份并改成新文件名，再提取。）
 
 确认是缓存问题后强制重来：
 
@@ -332,9 +332,9 @@ cargo clean -p clipmesh-desktop
 
 ### 换了图标要重建，不要只看旧的 exe
 
-`apps/desktop/src-tauri/target/` 是重构目录之前留下的**陈旧构建产物**，
-里面的 `clipmesh.exe` 用的还是最初的 Tauri 模板图标。
-真正的产物在仓库根的 `target/` 下，别双击错的那个。
+桌面端的可执行文件生成在仓库根的 `target/release/clipmesh-desktop.exe` —— 也就是工作区的
+target 目录，而不是 `apps/desktop/src-tauri/target/`。早先构建留下的 exe 里还是旧图标，
+所以要重新构建，别去双击那个陈旧的文件。
 
 ---
 
