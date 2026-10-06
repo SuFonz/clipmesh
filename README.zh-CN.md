@@ -132,7 +132,7 @@ npm run dev:android               # tauri android dev
 ```bash
 cargo test --workspace            # Rust：协议 / 身份 / 安全 / 引擎 / 网络 / 剪贴板
 npm run typecheck                 # 前端类型检查
-npm run build                     # 构建两端前端
+npm run build:ui                  # 构建两端前端
 ```
 
 ## 首次使用

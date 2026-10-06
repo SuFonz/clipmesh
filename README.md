@@ -135,7 +135,7 @@ The full Android build steps (NDK variables, Gradle module wiring) are in [`docs
 ```bash
 cargo test --workspace            # Rust: protocol / identity / security / engine / network / clipboard
 npm run typecheck                 # frontend type check
-npm run build                     # build the frontend for both apps
+npm run build:ui                  # build the frontend for both apps
 ```
 
 ## First run

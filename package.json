@@ -23,7 +23,8 @@
     "build:android:aab": "npm --prefix apps/android run build:aab",
     "dev:android:ui": "npm --prefix apps/android/ui run dev",
     "build:android:ui": "npm --prefix apps/android/ui run build",
-    "build": "npm --prefix apps/desktop/ui run build && npm --prefix apps/android/ui run build",
+    "build:ui": "npm --prefix apps/desktop/ui run build && npm --prefix apps/android/ui run build",
+    "build": "npm run build:desktop && npm run build:android",
     "typecheck": "npm --prefix apps/desktop/ui run typecheck && npm --prefix apps/android/ui run typecheck",
     "icons": "node scripts/update-icons.mjs",
     "tauri": "tauri"

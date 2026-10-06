@@ -374,7 +374,7 @@ Everything here should pass before committing:
 cargo test --workspace                        # Rust unit tests
 cargo clippy --workspace --all-targets        # recommended
 npm run typecheck                             # frontend type check
-npm run build                                 # build both frontends
+npm run build:ui                              # build both frontends
 ```
 
 `cargo test --workspace` also compiles `apps/android/src-tauri`,

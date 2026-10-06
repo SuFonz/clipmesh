@@ -371,7 +371,7 @@ target 目录，而不是 `apps/desktop/src-tauri/target/`。早先构建留下�
 cargo test --workspace                        # Rust 单元测试
 cargo clippy --workspace --all-targets        # 建议
 npm run typecheck                             # 前端类型检查
-npm run build                                 # 构建两端前端
+npm run build:ui                              # 构建两端前端
 ```
 
 `cargo test --workspace` 会一并编译 `apps/android/src-tauri`，
