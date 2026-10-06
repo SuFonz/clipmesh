@@ -18,6 +18,7 @@
 #![warn(missing_docs)]
 
 pub mod commands;
+pub mod images;
 pub mod state;
 
 #[cfg(feature = "desktop-tray")]

@@ -45,5 +45,8 @@ thiserror.workspace = true
 base64.workspace = true
 image.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 # The release profile lives in the workspace root; a member crate cannot
 # override it, and declaring one here would only produce a warning.

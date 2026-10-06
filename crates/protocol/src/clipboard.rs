@@ -291,6 +291,23 @@ impl ImagePayload {
         meta.verify(&data)?;
         Ok(Self { meta, data })
     }
+
+    /// Build from bytes that were stored on this device rather than received
+    /// from a peer.
+    ///
+    /// Recomputes the integrity metadata instead of trusting what came with the
+    /// entry. The digest is deliberately left out of the persisted history -
+    /// it is 32 bytes nobody displays - so an image restored after a restart
+    /// arrives with a placeholder that a peer would reject half way through the
+    /// transfer. The bytes themselves are ours, so the digest is simply derived
+    /// from them again.
+    #[must_use]
+    pub fn from_stored(meta: ImageMeta, data: Vec<u8>) -> Self {
+        let mut meta = meta;
+        meta.size = data.len() as u64;
+        meta.sha256 = sha256_of(&data);
+        Self { meta, data }
+    }
 }
 
 /// A clipboard entry as shown in history lists: everything except the pixels.
@@ -430,6 +447,20 @@ mod tests {
         assert_eq!(meta, restored);
         assert!(restored.verify(&data).is_ok());
         assert_eq!(restored.chunk_count(), 1);
+    }
+
+    #[test]
+    fn a_stored_payload_is_restamped_with_a_digest_peers_can_verify() {
+        let data = vec![9u8; 512];
+        // What survives a round trip through the history file: the digest is
+        // not serialised, so it comes back as zeroes.
+        let mut meta = ImageMeta::new_local(device(), &data, 16, 16);
+        meta.sha256 = [0u8; 32];
+        meta.size = 0;
+
+        let payload = ImagePayload::from_stored(meta, data.clone());
+        assert_eq!(payload.meta.size, data.len() as u64);
+        assert!(payload.meta.verify(&data).is_ok());
     }
 
     #[test]

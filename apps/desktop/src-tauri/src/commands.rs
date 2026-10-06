@@ -4,11 +4,13 @@
 //! a toast, so a structured error it cannot render would be worse than a
 //! sentence. Errors are logged with their full detail before being flattened.
 
+use std::sync::Arc;
+
 use clipmesh_core::{
     CoreEvent, PairingPrompt, PeerView, SendOutcome, Settings, SettingsPatch, StatusView,
     TrustedDeviceView,
 };
-use clipmesh_protocol::{ClipboardContent, ClipboardItem, DeviceId, Platform};
+use clipmesh_protocol::{ClipboardItem, DeviceId, Platform};
 use serde::Serialize;
 use tauri::State;
 
@@ -259,33 +261,31 @@ pub fn clear_history(state: State<'_, AppState>) -> Ipc<()> {
     Ok(())
 }
 
-/// A downscaled preview of an image that is still on the clipboard.
+/// A downscaled preview of a history image.
 ///
-/// This is the only place ClipMesh uses base64 - the wire format is raw PNG
-/// chunks, and the encoding here exists purely so the webview can render an
-/// `<img>` without a custom protocol handler. The image is downscaled first, so
-/// a 4K screenshot does not become a 13 MB string.
+/// Served from the copy the engine stored when the image entered the history,
+/// so every row can have a preview rather than only the one still on the
+/// clipboard. This is the only place ClipMesh uses base64 - the wire format is
+/// raw PNG chunks, and the encoding here exists purely so the webview can
+/// render an `<img>` without a custom protocol handler. The image is downscaled
+/// first, so a 4K screenshot does not become a 13 MB string.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_image_thumbnail(
     state: State<'_, AppState>,
     id: String,
     max_size: u32,
 ) -> Ipc<String> {
-    let content = state.engine.read_clipboard().await.map_err(fail)?;
-
-    let Some(ClipboardContent::Image(payload)) = content else {
-        return Err("the clipboard does not hold an image right now".to_owned());
-    };
-    if payload.meta.id != id {
-        return Err("that image is no longer on the clipboard".to_owned());
-    }
-
+    let images = Arc::clone(&state.images);
     let limit = max_size.clamp(32, 512);
-    let data = payload.data;
 
-    tokio::task::spawn_blocking(move || thumbnail_data_url(&data, limit))
-        .await
-        .map_err(|error| fail(format!("the preview task panicked: {error}")))?
+    // Decoding a screenshot is not work for the runtime's worker threads.
+    tokio::task::spawn_blocking(move || match images.read(&id) {
+        Ok(Some(png)) => thumbnail_data_url(&png, limit),
+        Ok(None) => Err("there is no stored copy of that image".to_owned()),
+        Err(error) => Err(fail(error)),
+    })
+    .await
+    .map_err(|error| fail(format!("the preview task panicked: {error}")))?
 }
 
 fn thumbnail_data_url(png: &[u8], max_size: u32) -> Ipc<String> {

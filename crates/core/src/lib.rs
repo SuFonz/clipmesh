@@ -6,9 +6,9 @@
 //!
 //! ## What lives here
 //!
-//! * [`provider`] - `ClipboardProvider`, `NetworkProvider`, `IdentityProvider`.
-//!   Everything platform specific is behind one of these, which is why this
-//!   crate compiles and is tested on any machine.
+//! * [`provider`] - `ClipboardProvider`, `NetworkProvider`, `IdentityProvider`
+//!   and `ImageStore`. Everything platform specific is behind one of these,
+//!   which is why this crate compiles and is tested on any machine.
 //! * [`manager::SyncManager`] - the orchestrator. Discovery, pairing, the
 //!   handshake, sending, receiving and history all meet here.
 //! * [`sync`] - deduplication, echo suppression, the sync policy and history.
@@ -46,6 +46,8 @@
 //!     network,
 //!     settings: Settings::default(),
 //!     settings_path: None,
+//!     history_path: None,
+//!     images: None,
 //! });
 //! let mut events = engine.subscribe();
 //! engine.spawn();
@@ -76,13 +78,13 @@ pub use event::{
 };
 pub use manager::{SendOutcome, SharedSyncManager, SyncManager, SyncManagerOptions};
 pub use provider::{
-    ClipboardEvent, ClipboardProvider, IdentityProvider, NetworkEvent, NetworkProvider,
-    PeerAddress, PeerSession,
+    ClipboardEvent, ClipboardProvider, IdentityProvider, ImageStore, NetworkEvent,
+    NetworkProvider, PeerAddress, PeerSession,
 };
 pub use settings::{Settings, SettingsPatch};
 pub use sync::{
-    ContentSignature, DedupCache, EchoSuppressor, History, SyncPolicy, DEFAULT_DEDUP_CAPACITY,
-    DEFAULT_ECHO_WINDOW, DEFAULT_HISTORY_CAPACITY,
+    ContentSignature, DedupCache, EchoSuppressor, History, PushOutcome, SyncPolicy,
+    DEFAULT_DEDUP_CAPACITY, DEFAULT_ECHO_WINDOW, DEFAULT_HISTORY_CAPACITY,
 };
 
 /// The trust store, shared between the engine and the network layer.

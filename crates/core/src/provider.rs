@@ -1,9 +1,9 @@
-//! The three abstractions the engine needs from the outside world.
+//! The four abstractions the engine needs from the outside world.
 //!
-//! `clipmesh-core` never links against a windowing toolkit, a network stack or
-//! an operating system clipboard. It only knows these traits, which is what
-//! makes the whole engine testable with fakes and portable to a new platform
-//! by implementing three traits.
+//! `clipmesh-core` never links against a windowing toolkit, a network stack, an
+//! operating system clipboard or an image codec. It only knows these traits,
+//! which is what makes the whole engine testable with fakes and portable to a
+//! new platform by implementing four traits.
 //!
 //! ```text
 //!        ┌──────────────────────────────┐
@@ -15,8 +15,13 @@
 //!         arboard /   mdns-sd + TCP     Ed25519 key +
 //!         Android     + rustls TLS      trust store
 //! ```
+//!
+//! [`ImageStore`] is the fourth, injected the same way: it keeps the pixels of
+//! history images, which is what lets an entry be previewed or put back on the
+//! clipboard long after the user copied something else.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use clipmesh_identity::{DeviceCertificate, Fingerprint};
@@ -64,6 +69,39 @@ pub trait ClipboardProvider: Send + Sync + 'static {
     /// right before [`ClipboardProvider::write`] when a backend cannot detect
     /// this on its own.
     fn suppress_next_change(&self) {}
+}
+
+/// Keep the pixels of history images, and hand them back when asked.
+///
+/// The engine hands over raw PNG bytes and nothing else: it has no image codec,
+/// no base64 and no opinion about where a file goes, which is what keeps those
+/// dependencies out of this crate and lets the desktop and Android hosts share
+/// one engine.
+///
+/// A store is what makes an image in the history more than a row of metadata:
+/// with the bytes back, the engine can put the picture on the clipboard again
+/// or send it to a peer, long after the user copied something else. Everything
+/// is best effort - a cache that cannot be written or read is a missing
+/// convenience, never a reason to fail a clipboard operation the user did not
+/// ask about.
+pub trait ImageStore: Send + Sync + 'static {
+    /// Keep the image bytes for `id`.
+    ///
+    /// Returns where the bytes were stored **relative to the state directory**,
+    /// which is what the history file records, so that a history restored on
+    /// another machine or from a backup still resolves as long as the state
+    /// directory moved with it. `None` means nothing was stored; the entry then
+    /// stays in the history as metadata only.
+    fn put(&self, id: &str, png: &[u8]) -> Option<PathBuf>;
+
+    /// The bytes stored for `id`, if they are still there.
+    fn get(&self, id: &str) -> Option<Vec<u8>>;
+
+    /// Drop what was stored for `id`.
+    ///
+    /// Called when the entry leaves the history - evicted, removed, cleared.
+    /// A missing file is not an error.
+    fn forget(&self, id: &str);
 }
 
 /// A device we can see on the local network but may not have connected to yet.

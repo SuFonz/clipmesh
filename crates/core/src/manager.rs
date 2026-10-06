@@ -48,7 +48,8 @@ use crate::event::{
     CoreEvent, PairingDirection, PairingPrompt, PeerView, StatusView, TrustedDeviceView,
 };
 use crate::provider::{
-    ClipboardEvent, ClipboardProvider, NetworkEvent, NetworkProvider, PeerAddress, PeerSession,
+    ClipboardEvent, ClipboardProvider, ImageStore, NetworkEvent, NetworkProvider, PeerAddress,
+    PeerSession,
 };
 use crate::settings::{Settings, SettingsPatch};
 use crate::sync::{DedupCache, EchoSuppressor, History};
@@ -100,6 +101,13 @@ pub struct SyncManagerOptions {
     pub settings: Settings,
     /// Where to persist settings. `None` keeps them in memory only.
     pub settings_path: Option<PathBuf>,
+    /// Where to persist the clipboard history. `None` keeps it in memory only.
+    pub history_path: Option<PathBuf>,
+    /// Where the pixels of history images are kept.
+    ///
+    /// `None` disables them: the history still lists images, but nothing can
+    /// preview, restore or re-send one.
+    pub images: Option<Arc<dyn ImageStore>>,
 }
 
 /// A pairing we started and are waiting to hear back about.
@@ -134,6 +142,8 @@ pub struct SyncManager {
     network: Arc<dyn NetworkProvider>,
     settings: RwLock<Settings>,
     settings_path: Option<PathBuf>,
+    history_path: Option<PathBuf>,
+    images: Option<Arc<dyn ImageStore>>,
 
     registry: Mutex<DeviceRegistry>,
     dedup: Mutex<DedupCache>,
@@ -158,6 +168,14 @@ impl SyncManager {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let history_capacity = options.settings.history_capacity;
 
+        // A missing history file is not news; a damaged one is logged inside
+        // `load` and treated as empty, because losing a list of copied items is
+        // not the security event a damaged trust store would be.
+        let history = match &options.history_path {
+            Some(path) => History::load(path, history_capacity),
+            None => History::new(history_capacity),
+        };
+
         Arc::new(Self {
             identity: options.identity,
             trust: options.trust,
@@ -165,10 +183,12 @@ impl SyncManager {
             network: options.network,
             settings: RwLock::new(options.settings),
             settings_path: options.settings_path,
+            history_path: options.history_path,
+            images: options.images,
             registry: Mutex::new(DeviceRegistry::default()),
             dedup: Mutex::new(DedupCache::default()),
             echo: Mutex::new(EchoSuppressor::default()),
-            history: Mutex::new(History::new(history_capacity)),
+            history: Mutex::new(history),
             sessions: Mutex::new(HashMap::new()),
             outgoing: Mutex::new(HashMap::new()),
             incoming_nonces: Mutex::new(HashMap::new()),
@@ -505,7 +525,16 @@ impl SyncManager {
 
             if policy_changed {
                 let capacity = self.settings.read().history_capacity;
-                *self.history.lock() = History::new(capacity);
+                // A rebuilt list inherits nothing, so every cached preview
+                // belongs to an entry that no longer exists.
+                let dropped = {
+                    let mut history = self.history.lock();
+                    let dropped = history.clear();
+                    *history = History::new(capacity);
+                    dropped
+                };
+                self.forget_images(dropped);
+                self.persist_history();
                 self.emit_history();
             }
 
@@ -664,7 +693,7 @@ impl SyncManager {
         }
 
         self.dedup.lock().insert(content.id());
-        self.record_history(content.to_item());
+        self.record_history(&content);
         self.publish(&content).await
     }
 
@@ -683,7 +712,7 @@ impl SyncManager {
 
         let content = ClipboardContent::Text(payload);
         self.dedup.lock().insert(content.id());
-        self.record_history(content.to_item());
+        self.record_history(&content);
         self.publish(&content).await
     }
 
@@ -700,12 +729,11 @@ impl SyncManager {
 
     /// Send a history entry again.
     ///
-    /// Images are re-read from the clipboard when they are still there; a
-    /// payload that has since been replaced cannot be re-sent, because ClipMesh
-    /// deliberately does not keep pixels in memory or on disk.
+    /// Text is re-sent from the entry itself and images from the stored copy of
+    /// their pixels, so both work long after the clipboard has moved on.
     ///
     /// # Errors
-    /// Returns [`CoreError`] when the entry is unknown or cannot be re-sent.
+    /// Returns [`CoreError`] when the entry is unknown or its pixels are gone.
     pub async fn resend_history_item(self: &Arc<Self>, id: &str) -> Result<SendOutcome> {
         let item = self
             .history
@@ -722,16 +750,9 @@ impl SyncManager {
                 self.publish(&content).await
             }
             ClipboardItem::Image(meta) => {
-                let current = self.clipboard.read().await?;
-                match current {
-                    Some(ClipboardContent::Image(payload)) if payload.meta.id == meta.id => {
-                        self.publish(&ClipboardContent::Image(payload)).await
-                    }
-                    _ => Err(CoreError::Clipboard(
-                        "that image is no longer on the clipboard, so it cannot be re-sent"
-                            .to_owned(),
-                    )),
-                }
+                let content = self.restored_image(meta)?;
+                self.dedup.lock().insert(content.id());
+                self.publish(&content).await
             }
         }
     }
@@ -739,8 +760,8 @@ impl SyncManager {
     /// Put a history entry back on the local clipboard without sending it.
     ///
     /// # Errors
-    /// Returns [`CoreError`] when the entry is unknown or the clipboard is
-    /// unavailable.
+    /// Returns [`CoreError`] when the entry is unknown, its pixels are gone or
+    /// the clipboard is unavailable.
     pub async fn copy_history_item(&self, id: &str) -> Result<()> {
         let item = self
             .history
@@ -750,21 +771,40 @@ impl SyncManager {
             .find(|item| item.id() == id)
             .ok_or_else(|| CoreError::Other(format!("no history entry with id {id}")))?;
 
-        match item {
-            ClipboardItem::Text(payload) => {
-                let content = ClipboardContent::Text(payload);
-                self.echo.lock().record_write(&content);
-                self.clipboard.write(&content).await
-            }
-            ClipboardItem::Image(_) => Err(CoreError::Clipboard(
-                "image entries cannot be restored from history yet".to_owned(),
-            )),
-        }
+        let content = match item {
+            ClipboardItem::Text(payload) => ClipboardContent::Text(payload),
+            ClipboardItem::Image(meta) => self.restored_image(meta)?,
+        };
+
+        // Writing to the clipboard makes the platform watcher fire as if the
+        // user had copied it; remember the write so we do not broadcast a
+        // restore as if it were a fresh copy.
+        self.echo.lock().record_write(&content);
+        self.clipboard.write(&content).await
+    }
+
+    /// Rebuild a history image from the pixels the store kept.
+    ///
+    /// The digest is recomputed from the bytes rather than read back: it is
+    /// deliberately not written to `history.json` (32 numbers nobody displays,
+    /// and meaningless in the UI), while a peer verifies the chunks it receives
+    /// against it and would reject a restored image that carried zeroes.
+    fn restored_image(&self, meta: ImageMeta) -> Result<ClipboardContent> {
+        let data = self.stored_image(&meta)?;
+        Ok(ClipboardContent::Image(ImagePayload::from_stored(
+            meta, data,
+        )))
     }
 
     /// Empty the history.
+    ///
+    /// The stored pixels of every entry go with it: leaving them behind would
+    /// keep clipboard images on disk after the user asked for them to be
+    /// forgotten.
     pub fn clear_history(&self) {
-        self.history.lock().clear();
+        let dropped = self.history.lock().clear();
+        self.forget_images(dropped);
+        self.persist_history();
         self.emit_history();
     }
 
@@ -1193,7 +1233,7 @@ impl SyncManager {
 
         let item = content.to_item();
         tracing::debug!(%device_id, id = item.id(), kind = %item.kind(), "applied remote content");
-        self.record_history(item.clone());
+        self.record_history(&content);
         self.emit(CoreEvent::ClipboardReceived(Box::new(item)));
     }
 
@@ -1216,7 +1256,7 @@ impl SyncManager {
 
         self.dedup.lock().insert(content.id());
         let item = content.to_item();
-        self.record_history(item.clone());
+        self.record_history(&content);
 
         match self.publish(&content).await {
             Ok(outcome) => {
@@ -1315,10 +1355,94 @@ impl SyncManager {
         self.emit(CoreEvent::History(self.history()));
     }
 
-    fn record_history(&self, item: ClipboardItem) {
-        let changed = self.history.lock().push(item);
-        if changed {
-            self.emit_history();
+    /// Add content to the history, storing its pixels and releasing whatever it
+    /// pushes out.
+    ///
+    /// The bytes are only available here: an image reaches the history at the
+    /// one moment the engine holds its pixels, and the clipboard they came from
+    /// may be overwritten a second later. Storing them before the history event
+    /// is emitted also means the UI, which fetches a preview as soon as it sees
+    /// a row, never races the write.
+    fn record_history(&self, content: &ClipboardContent) {
+        let image_path = match content {
+            ClipboardContent::Image(payload) => self.store_image(&payload.meta.id, &payload.data),
+            ClipboardContent::Text(_) => None,
+        };
+
+        let outcome = self.history.lock().push(content.to_item(), image_path);
+        if !outcome.changed {
+            return;
+        }
+
+        if let Some(evicted) = &outcome.evicted {
+            self.forget_image(evicted.id());
+        }
+
+        self.persist_history();
+        self.emit_history();
+    }
+
+    /// Hand the pixels of an image to the store, if there is one.
+    ///
+    /// Returns where they were put, relative to the state directory, which is
+    /// what the history has to remember to find them again.
+    fn store_image(&self, id: &str, png: &[u8]) -> Option<PathBuf> {
+        let store = self.images.as_ref()?;
+        store.put(id, png)
+    }
+
+    fn forget_image(&self, id: &str) {
+        let Some(store) = &self.images else {
+            return;
+        };
+        store.forget(id);
+    }
+
+    /// The stored pixels of a history image.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Clipboard`] when this device has no image store or
+    /// the picture is no longer in it - both are cases the user has to be told
+    /// about, because the alternative is a silent no-op.
+    fn stored_image(&self, meta: &ImageMeta) -> Result<Vec<u8>> {
+        self.images
+            .as_ref()
+            .and_then(|store| store.get(&meta.id))
+            .ok_or_else(|| {
+                CoreError::Clipboard(
+                    "the cached copy of that image is gone, so it cannot be used again".to_owned(),
+                )
+            })
+    }
+
+    /// Release the pixels of entries that are leaving the history.
+    ///
+    /// Only images ever had any, so text entries are skipped rather than asking
+    /// the store to delete a file that was never written.
+    fn forget_images(&self, dropped: Vec<ClipboardItem>) {
+        for item in &dropped {
+            if matches!(item, ClipboardItem::Image(_)) {
+                self.forget_image(item.id());
+            }
+        }
+    }
+
+    /// Write the history out, if it is persisted at all.
+    ///
+    /// Synchronous, like the settings and trust writes: the file holds metadata
+    /// for a few dozen entries, and handing it to a background task would let a
+    /// save race the next mutation and persist a stale list.
+    fn persist_history(&self) {
+        let Some(path) = &self.history_path else {
+            return;
+        };
+
+        if let Err(error) = self.history.lock().save(path) {
+            tracing::warn!(
+                %error,
+                path = %path.display(),
+                "could not persist the clipboard history"
+            );
         }
     }
 
@@ -1416,6 +1540,156 @@ pub type SharedSyncManager = Arc<SyncManager>;
 mod tests {
     use super::*;
 
+    use async_trait::async_trait;
+    use clipmesh_protocol::{ImageMeta, ImagePayload, TextPayload};
+    use futures::stream::{self, BoxStream};
+
+    /// A clipboard that holds whatever was last written to it.
+    #[derive(Default)]
+    struct FakeClipboard {
+        content: Mutex<Option<ClipboardContent>>,
+    }
+
+    #[async_trait]
+    impl ClipboardProvider for FakeClipboard {
+        async fn read(&self) -> Result<Option<ClipboardContent>> {
+            Ok(self.content.lock().clone())
+        }
+
+        async fn write(&self, content: &ClipboardContent) -> Result<()> {
+            *self.content.lock() = Some(content.clone());
+            Ok(())
+        }
+
+        fn watch(&self) -> BoxStream<'static, ClipboardEvent> {
+            stream::empty().boxed()
+        }
+    }
+
+    /// A network that goes nowhere.
+    struct FakeNetwork;
+
+    #[async_trait]
+    impl NetworkProvider for FakeNetwork {
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn connect(&self, _peer: &PeerAddress) -> Result<()> {
+            Ok(())
+        }
+
+        async fn send(&self, _device: DeviceId, _envelope: Envelope) -> Result<()> {
+            Ok(())
+        }
+
+        async fn disconnect(&self, _device: DeviceId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn broadcast(&self, _envelope: Envelope) -> Result<Vec<DeviceId>> {
+            Ok(Vec::new())
+        }
+
+        fn connected_peers(&self) -> Vec<DeviceId> {
+            Vec::new()
+        }
+
+        fn events(&self) -> BoxStream<'static, NetworkEvent> {
+            stream::empty().boxed()
+        }
+
+        async fn shutdown(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A store that writes real files under a state root, so that a "restart"
+    /// in a test sees exactly what a restart on disk would see.
+    struct FakeImageStore {
+        root: PathBuf,
+        forgets: Mutex<Vec<String>>,
+    }
+
+    impl FakeImageStore {
+        fn new(root: impl Into<PathBuf>) -> Self {
+            Self {
+                root: root.into(),
+                forgets: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn stored_path(&self, id: &str) -> PathBuf {
+            self.root.join("images").join(format!("{id}.png"))
+        }
+
+        fn forgotten_ids(&self) -> Vec<String> {
+            self.forgets.lock().clone()
+        }
+    }
+
+    impl ImageStore for FakeImageStore {
+        fn put(&self, id: &str, png: &[u8]) -> Option<PathBuf> {
+            // `/` separated, like the real store: the path is written to
+            // `history.json` and has to mean the same thing on every platform.
+            let relative = PathBuf::from(format!("images/{id}.png"));
+            let absolute = self.root.join(&relative);
+            std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            std::fs::write(&absolute, png).unwrap();
+            Some(relative)
+        }
+
+        fn get(&self, id: &str) -> Option<Vec<u8>> {
+            std::fs::read(self.stored_path(id)).ok()
+        }
+
+        fn forget(&self, id: &str) {
+            self.forgets.lock().push(id.to_owned());
+            let _ = std::fs::remove_file(self.stored_path(id));
+        }
+    }
+
+    /// An engine wired to fakes, with only the bits under test configured.
+    fn build_engine(
+        history_path: Option<PathBuf>,
+        images: Option<Arc<dyn ImageStore>>,
+        capacity: usize,
+    ) -> Arc<SyncManager> {
+        SyncManager::new(SyncManagerOptions {
+            identity: Arc::new(DeviceIdentity::generate("Test device").unwrap()),
+            trust: Arc::new(RwLock::new(TrustStore::in_memory())),
+            clipboard: Arc::new(FakeClipboard::default()),
+            network: Arc::new(FakeNetwork),
+            settings: Settings {
+                history_capacity: capacity,
+                ..Settings::default()
+            },
+            settings_path: None,
+            history_path,
+            images,
+        })
+    }
+
+    fn text_content(content: &str) -> ClipboardContent {
+        ClipboardContent::Text(TextPayload::new_local(content, DeviceId::new()))
+    }
+
+    fn image_content(bytes: &[u8]) -> ClipboardContent {
+        let meta = ImageMeta::new_local(DeviceId::new(), bytes, 8, 8);
+        ClipboardContent::Image(ImagePayload::new(meta, bytes.to_vec()).unwrap())
+    }
+
+    fn contents(engine: &SyncManager) -> Vec<String> {
+        engine
+            .history()
+            .into_iter()
+            .map(|item| match item {
+                ClipboardItem::Text(payload) => payload.content,
+                ClipboardItem::Image(_) => panic!("only text entries were expected"),
+            })
+            .collect()
+    }
+
     #[test]
     fn an_untrusted_peer_may_only_ask_to_pair_and_answer_our_own_request() {
         // Anyone may ask to pair; the user is the one who decides.
@@ -1450,5 +1724,263 @@ mod tests {
             assert!(!may_handle_from_untrusted(kind, false), "{kind:?}");
             assert!(!may_handle_from_untrusted(kind, true), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_none_history_path_stays_in_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = build_engine(None, None, 50);
+
+        engine.record_history(&text_content("only in memory"));
+
+        assert_eq!(contents(&engine), vec!["only in memory"]);
+        assert!(
+            std::fs::read_dir(directory.path()).unwrap().next().is_none(),
+            "nothing may be written when no path is configured"
+        );
+    }
+
+    #[test]
+    fn history_survives_a_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.json");
+
+        {
+            let first = build_engine(Some(path.clone()), None, 50);
+            first.record_history(&text_content("first"));
+            first.record_history(&text_content("second"));
+            assert_eq!(contents(&first), vec!["second", "first"]);
+        }
+
+        let restarted = build_engine(Some(path), None, 50);
+        assert_eq!(contents(&restarted), vec!["second", "first"]);
+    }
+
+    #[test]
+    fn a_corrupt_history_file_is_replaced_by_the_next_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.json");
+        std::fs::write(&path, "{ truncated").unwrap();
+
+        let first = build_engine(Some(path.clone()), None, 50);
+        assert!(
+            first.history().is_empty(),
+            "a damaged file must not stop the engine or invent entries"
+        );
+
+        first.record_history(&text_content("after the damage"));
+        assert_eq!(contents(&first), vec!["after the damage"]);
+        assert_eq!(
+            contents(&build_engine(Some(path), None, 50)),
+            vec!["after the damage"]
+        );
+    }
+
+    #[test]
+    fn clearing_the_history_empties_the_persisted_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.json");
+
+        let engine = build_engine(Some(path.clone()), None, 50);
+        engine.record_history(&text_content("gone"));
+        engine.clear_history();
+
+        assert!(engine.history().is_empty());
+        assert!(build_engine(Some(path), None, 50).history().is_empty());
+    }
+
+    #[test]
+    fn only_images_reach_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        engine.record_history(&text_content("no pixels"));
+        assert!(std::fs::read_dir(directory.path()).unwrap().next().is_none());
+
+        let image = image_content(&[1, 2, 3, 4]);
+        engine.record_history(&image);
+
+        assert_eq!(
+            store.get(image.id()).as_deref(),
+            Some(&[1u8, 2, 3, 4][..]),
+            "the raw PNG bytes are handed over untouched"
+        );
+    }
+
+    #[test]
+    fn an_evicted_entry_takes_its_pixels_with_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 2);
+
+        let first = image_content(&[1]);
+        let first_id = first.id().to_owned();
+        let second = image_content(&[2]);
+        let second_id = second.id().to_owned();
+
+        engine.record_history(&first);
+        engine.record_history(&second);
+        assert!(
+            store.forgotten_ids().is_empty(),
+            "a list that is not full yet evicts nothing"
+        );
+
+        engine.record_history(&text_content("pushes the first image out"));
+
+        assert_eq!(store.forgotten_ids(), vec![first_id.clone()]);
+        assert!(store.get(&first_id).is_none(), "the file is gone too");
+        assert_eq!(engine.history().len(), 2);
+        assert_eq!(
+            store.get(&second_id).as_deref(),
+            Some(&[2u8][..]),
+            "the surviving image keeps its pixels"
+        );
+    }
+
+    #[test]
+    fn clearing_the_history_drops_every_stored_image_and_leaves_text_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        let first = image_content(&[1]);
+        let second = image_content(&[2]);
+        engine.record_history(&first);
+        engine.record_history(&text_content("no pixels to drop"));
+        engine.record_history(&second);
+
+        engine.clear_history();
+
+        let mut forgotten = store.forgotten_ids();
+        forgotten.sort();
+        let mut expected = vec![first.id().to_owned(), second.id().to_owned()];
+        expected.sort();
+        assert_eq!(forgotten, expected);
+        assert!(store.get(first.id()).is_none());
+        assert!(store.get(second.id()).is_none());
+    }
+
+    #[test]
+    fn an_image_survives_a_restart_with_its_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.json");
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+
+        let image = image_content(&[9, 8, 7]);
+        let id = image.id().to_owned();
+        {
+            let engine = build_engine(
+                Some(path.clone()),
+                Some(Arc::clone(&store) as Arc<dyn ImageStore>),
+                50,
+            );
+            engine.record_history(&image);
+            engine.record_history(&text_content("after the image"));
+        }
+
+        let restarted = build_engine(
+            Some(path),
+            Some(Arc::clone(&store) as Arc<dyn ImageStore>),
+            50,
+        );
+        let ids: Vec<String> = restarted
+            .history()
+            .into_iter()
+            .map(|item| item.id().to_owned())
+            .collect();
+        assert_eq!(ids.len(), 2, "both entries come back");
+        assert_eq!(ids[1], id, "the image is still listed, older than the text");
+        assert_eq!(store.get(&id).as_deref(), Some(&[9u8, 8, 7][..]));
+    }
+
+    #[tokio::test]
+    async fn an_image_in_the_history_can_be_put_back_on_the_clipboard() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        let image = image_content(&[1, 2, 3]);
+        let id = image.id().to_owned();
+        engine.record_history(&image);
+
+        engine.copy_history_item(&id).await.unwrap();
+
+        match engine.read_clipboard().await.unwrap() {
+            Some(ClipboardContent::Image(payload)) => {
+                assert_eq!(payload.meta.id, id);
+                assert_eq!(payload.data, vec![1, 2, 3]);
+                assert!(
+                    payload.meta.verify(&payload.data).is_ok(),
+                    "a restored image must carry a digest a peer can check"
+                );
+            }
+            other => panic!("expected the image back on the clipboard, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_image_in_the_history_can_be_sent_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        let image = image_content(&[4, 5]);
+        let id = image.id().to_owned();
+        engine.record_history(&image);
+
+        let outcome = engine.resend_history_item(&id).await.unwrap();
+        assert_eq!(outcome.id, id);
+    }
+
+    #[tokio::test]
+    async fn an_image_whose_pixels_are_gone_cannot_be_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        let image = image_content(&[1]);
+        let id = image.id().to_owned();
+        engine.record_history(&image);
+        std::fs::remove_file(store.stored_path(&id)).unwrap();
+
+        assert!(engine.copy_history_item(&id).await.is_err());
+        assert!(engine.resend_history_item(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn without_a_store_an_image_cannot_be_restored() {
+        // The engine stays usable with no store at all; it just cannot bring
+        // pixels back, and says so instead of pretending.
+        let engine = build_engine(None, None, 50);
+        let image = image_content(&[1]);
+        let id = image.id().to_owned();
+        engine.record_history(&image);
+
+        assert_eq!(engine.history().len(), 1);
+        assert!(engine.copy_history_item(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn changing_the_sync_policy_rebuilds_the_history_without_its_images() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(FakeImageStore::new(directory.path()));
+        let engine = build_engine(None, Some(Arc::clone(&store) as Arc<dyn ImageStore>), 50);
+
+        let image = image_content(&[1]);
+        let image_id = image.id().to_owned();
+        engine.record_history(&image);
+
+        engine
+            .update_settings(SettingsPatch {
+                sync_images: Some(false),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(engine.history().is_empty());
+        assert_eq!(store.forgotten_ids(), vec![image_id.clone()]);
+        assert!(store.get(&image_id).is_none());
     }
 }

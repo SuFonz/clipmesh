@@ -166,7 +166,7 @@ export interface IdentityView {
 | `resend_history_item` | `{ id: string }` | `SendResult` | 重新发送历史条目 |
 | `copy_history_item` | `{ id: string }` | `void` | 只写本机剪贴板，不发送 |
 | `clear_history` | — | `void` | |
-| `get_image_thumbnail` | `{ id: string, maxSize: number }` | `string` | 返回 **data URL**，已降采样 |
+| `get_image_thumbnail` | `{ id: string, maxSize: number }` | `string` | 返回 **data URL**，已降采样。像素来自本机 `<state>/images/<id>.png` 副本，与剪贴板当前内容无关 |
 
 > `get_image_thumbnail` 是本项目里唯一使用 base64 的地方，并且只服务于本地 UI 缩略图。
 > 网络上传输图片永远是原始 PNG 二进制分片（见 `crates/protocol/src/frame.rs`）。

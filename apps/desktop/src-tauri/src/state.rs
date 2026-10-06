@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
-use clipmesh_core::{Settings, SharedSyncManager, SyncManager, SyncManagerOptions};
+use clipmesh_core::{ImageStore, Settings, SharedSyncManager, SyncManager, SyncManagerOptions};
 use clipmesh_core::ClipboardProvider as ClipmeshClipboardProvider;
 use clipmesh_identity::{DeviceIdentity, IdentityError, IdentityPaths, TrustStore};
 use clipmesh_network::{NetworkConfig, NetworkService};
 use clipmesh_protocol::DeviceId;
 use parking_lot::RwLock;
+
+use crate::images::ImageCache;
 
 /// Everything that can go wrong while bringing the app up.
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +45,12 @@ pub struct AppState {
     pub network: Arc<NetworkService>,
     /// Where the state files live.
     pub paths: IdentityPaths,
+    /// The pixels behind history images.
+    ///
+    /// Shared with the engine, which stores an image the moment it enters the
+    /// history, and used by the commands that serve a thumbnail or restore an
+    /// image to the clipboard.
+    pub images: Arc<ImageCache>,
 }
 
 impl AppState {
@@ -121,6 +129,12 @@ impl AppState {
             NetworkConfig::default(),
         );
 
+        // The store is rooted at the state directory rather than at a directory
+        // of its own: the paths it hands the history are relative to that root,
+        // so the whole state directory can be moved or restored from a backup
+        // and still resolve.
+        let images = Arc::new(ImageCache::new(paths.root()));
+
         let engine = SyncManager::new(SyncManagerOptions {
             identity: Arc::clone(&identity),
             trust,
@@ -128,6 +142,8 @@ impl AppState {
             network: Arc::clone(&network) as Arc<dyn clipmesh_core::NetworkProvider>,
             settings,
             settings_path: Some(paths.settings()),
+            history_path: Some(paths.history()),
+            images: Some(Arc::clone(&images) as Arc<dyn ImageStore>),
         });
 
         Ok(Self {
@@ -135,6 +151,7 @@ impl AppState {
             identity,
             network,
             paths,
+            images,
         })
     }
 
