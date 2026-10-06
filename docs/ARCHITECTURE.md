@@ -127,7 +127,7 @@ protocol ← identity ← security ← core ← { clipboard, network } ← apps/
 
 `ClipboardProvider` 的各平台实现：`windows.rs` / `linux.rs` / `macos.rs` / `android.rs`。
 桌面统一走 `arboard`（文本 + 图片），Windows 额外用 `GetClipboardSequenceNumber` 做廉价变更检测。
-Android 不直接调用系统 API，而是通过注入的 `NativeClipboardBridge` 把请求转给 Kotlin 插件——
+Android 不直接调用系统 API，而是通过注入的 `AndroidClipboardHost` 把请求转给 Kotlin 插件——
 这样 `clipmesh-clipboard` 依然与平台无关，可以被桌面编译。
 
 ---
@@ -291,10 +291,11 @@ Vue → Tauri → Rust → Android Native Plugin → Android API
 | 目录 | 职责 |
 | --- | --- |
 | `foregroundservice/` | 常驻前台服务，维持进程与网络会话；通知栏常驻，带「广播剪贴板」按钮。 |
+| `notification/` | 通知的构造与投递：常驻服务通知与「收到剪贴板」通知。 |
+| `broadcast/` | 透明 Activity 与进程级 handoff：通知按钮把剪贴板读出来交给 Rust，界面不出现；读不到时回退到可见路径。 |
 | `clipboard/` | `ClipboardManager` 读写；Android 10+ 后台读剪贴板受限，因此广播由用户点击通知按钮**主动触发**。 |
-| `notification/` | 收到远端剪贴板时显示通知，支持预览与一键复制。 |
 
-Android 上 Rust 不直接调 `ClipboardManager`，而是通过 `NativeClipboardBridge` trait
+Android 上 Rust 不直接调 `ClipboardManager`，而是通过 `AndroidClipboardHost` trait
 把请求交给 Kotlin 实现，保持 `crates/**` 的平台无关性。
 
 ---

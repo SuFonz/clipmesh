@@ -142,24 +142,15 @@ export function androidRequestNotificationPermission(): Promise<boolean> {
 }
 
 /**
- * 广播完成后把应用退回后台。
+ * 把应用退回后台。
  *
- * 读剪贴板要求应用有焦点，所以从外部发起的广播必然会把 ClipMesh 带到前台；
- * 这个调用让用户回到原来的应用，而不是被留在 ClipMesh 里自己按返回键。
+ * 通知栏那颗「广播剪贴板」默认走透明 Activity，不显示任何界面；只有它读不到剪贴板
+ * 时才会把真正的 Activity 拉到前台，这时由 Rust 侧在广播成功后调用同一个原生方法把
+ * 用户送回去。这个封装留给界面自己需要离开时用。
  * 非 Android 平台会抛错，调用方自己吞掉即可。
  */
 export function androidLeaveApp(): Promise<void> {
   return call("android_leave_app");
-}
-
-/**
- * 通知栏是否请求了一次广播。返回 `true` 时请求已被消费（不会重复）。
- *
- * 读剪贴板要求应用有焦点，所以通知栏那颗按钮只能先把应用带到前台、留下一个标记，
- * 由界面在能读剪贴板之后取走。
- */
-export function androidTakePendingBroadcast(): Promise<boolean> {
-  return call("android_take_pending_broadcast");
 }
 
 /** 把上面这一组命令聚在一起，方便在组件里 `import { clipboard } from ...`。 */
@@ -187,5 +178,4 @@ export const androidApi = {
   isServiceRunning: androidServiceRunning,
   requestNotificationPermission: androidRequestNotificationPermission,
   leaveApp: androidLeaveApp,
-  takePendingBroadcast: androidTakePendingBroadcast,
 } as const;

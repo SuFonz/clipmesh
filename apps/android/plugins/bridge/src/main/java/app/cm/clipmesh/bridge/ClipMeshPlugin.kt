@@ -11,6 +11,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import app.cm.clipmesh.bridge.broadcast.BroadcastHandoff
 import app.cm.clipmesh.bridge.clipboard.ClipboardAccess
 import app.cm.clipmesh.bridge.foregroundservice.BootReceiver
 import app.cm.clipmesh.bridge.foregroundservice.ClipMeshService
@@ -41,10 +42,12 @@ private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
  * so every `@Command` here has a matching typed method in
  * `apps/android/src-tauri/src/plugin.rs`. Changing a name on one side without
  * the other is a runtime failure, not a compile error - the names are therefore
- * listed in `docs/IPC.md`.
+ * listed in `docs/BUILD.md`.
  *
- * All clipboard work happens on the main looper, because
- * `ClipboardManager` requires it.
+ * Everything that touches `ClipboardManager` runs on the main looper, because
+ * the platform requires it. Reading the process-wide broadcast handoff does not
+ * need one, and does not take one: it is polled while the app is in the
+ * background, where the main looper has better things to do.
  */
 @TauriPlugin(
     permissions = [
@@ -60,16 +63,23 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
         private const val TAG = "ClipMeshPlugin"
         private const val CLIPBOARD_DIR = "clipboard"
         private const val CLIPBOARD_FILE = "clipmesh-clipboard.png"
+    }
 
-        /**
-         * Set when the notification's broadcast action brings the app forward.
-         *
-         * A plain field rather than instance state: the activity can be recreated
-         * between the tap and the UI collecting it, and the request would be lost
-         * with the old instance.
-         */
-        @Volatile
-        private var pendingBroadcast = false
+    init {
+        // Rust registers this class during its own setup, so this is the moment
+        // the process can be said to have a host that is able to collect a
+        // broadcast handoff. `BroadcastActivity` checks the same flag: a process
+        // with no host would leave a request to rot.
+        BroadcastHandoff.attachHost()
+
+        // A process started *by* the notification action has no `onNewIntent` -
+        // the broadcast intent is the launch intent. Without this the visible
+        // fallback would bring the app up and then do nothing, which is exactly
+        // the failure it exists to avoid.
+        if (activity.intent?.action == ClipMeshNotifications.ACTION_BROADCAST) {
+            Log.i(TAG, "the app was started by the broadcast action")
+            BroadcastHandoff.deposit(BroadcastHandoff.Request.Visible)
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -89,32 +99,7 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun readClipboard(invoke: Invoke) {
         onMain {
-            when (val content = ClipboardAccess.read(activity)) {
-                is ClipboardAccess.Content.Text -> invoke.resolve(
-                    JSObject().apply {
-                        put("kind", "text")
-                        put("text", content.text)
-                    },
-                )
-
-                is ClipboardAccess.Content.Image -> {
-                    val encoded = content.bitmap.toPngBase64()
-                    if (encoded == null) {
-                        invoke.resolve(emptyPayload())
-                    } else {
-                        invoke.resolve(
-                            JSObject().apply {
-                                put("kind", "image")
-                                put("png", encoded)
-                                put("width", content.bitmap.width)
-                                put("height", content.bitmap.height)
-                            },
-                        )
-                    }
-                }
-
-                ClipboardAccess.Content.Empty -> invoke.resolve(emptyPayload())
-            }
+            invoke.resolve(contentToJson(ClipboardAccess.read(activity)))
         }
     }
 
@@ -270,11 +255,11 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
     /**
      * Send the app to the back of the task stack.
      *
-     * Used after a broadcast, so the user lands back in whatever they were
-     * doing instead of being left inside ClipMesh - the clipboard can only be
-     * read while the app has focus, so a broadcast from outside necessarily
-     * brings it forward first, and this is what makes that cost a moment rather
-     * than a detour.
+     * The ending of the **visible fallback**: the notification's action normally
+     * reads the clipboard from a transparent activity that shows nothing, but
+     * when that cannot do its job it brings this activity forward instead, and
+     * the user has to end up back in whatever they were doing rather than being
+     * left inside ClipMesh.
      *
      * `moveTaskToBack` rather than `finish()`: the process, and with it the
      * engine, has to stay alive behind the foreground service.
@@ -302,11 +287,12 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
     /**
      * Called by the Tauri activity when a notification action relaunches it.
      *
-     * Android 10+ will not let a background app read the clipboard, so tapping
-     * "broadcast clipboard" has to bring the activity forward first. All this
-     * does is remember *why* we were brought forward; the UI collects it with
-     * [takePendingBroadcast] once it is up, which is also when the clipboard
-     * becomes readable.
+     * This is the **visible fallback**: `BroadcastActivity` either never got
+     * focus or found nothing readable on the clipboard, so it brought the real
+     * activity forward instead of quietly giving up. Nothing is read here -
+     * Android will not hand the clipboard to an app that is still starting - the
+     * request is left in the handoff marked visible, and the Rust host reads
+     * through this activity once it is up.
      *
      * This used to call `trigger("broadcast-clipboard")`. That went nowhere:
      * `trigger` only delivers to `Channel`s registered through the plugin's
@@ -315,31 +301,85 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        when (intent.action) {
-            ClipMeshNotifications.ACTION_BROADCAST -> {
-                Log.i(TAG, "the notification asked for a clipboard broadcast")
-                pendingBroadcast = true
-            }
-            else -> Unit
-        }
+        if (intent.action != ClipMeshNotifications.ACTION_BROADCAST) return
+
+        Log.i(TAG, "the notification asked for a visible broadcast")
+        BroadcastHandoff.deposit(BroadcastHandoff.Request.Visible)
     }
 
     /**
-     * Collect a broadcast request that came from the notification.
+     * Collect a broadcast the notification asked for.
      *
-     * Returns `{"requested": true}` at most once per tap; the flag is cleared so
+     * Answers `{"requested": false}` when there is nothing to do, which is the
+     * usual answer: the Rust host polls this. `visible` says whether the user is
+     * looking at the app because of the request, `payload` carries what
+     * `BroadcastActivity` read when the request never had to become visible, and
+     * `serviceRunning` tells the poller whether the notification - the only
+     * thing that can start a request - is still up.
+     *
+     * A request is answered at most once: [BroadcastHandoff.take] clears it, so
      * a poll that runs twice cannot send twice.
+     *
+     * Resolved on the calling thread rather than the main looper. This only
+     * reads a process-wide field, and a hop per poll would put every pickup
+     * behind whatever the UI happens to be doing.
      */
     @Command
-    fun takePendingBroadcast(invoke: Invoke) {
-        val requested = pendingBroadcast
-        pendingBroadcast = false
-        invoke.resolve(JSObject().apply { put("requested", requested) })
+    fun takeBroadcast(invoke: Invoke) {
+        val request = BroadcastHandoff.take()
+        val response = JSObject().apply {
+            put("requested", request != null)
+            put("serviceRunning", ClipMeshService.isRunning)
+        }
+
+        when (request) {
+            null -> Unit
+
+            is BroadcastHandoff.Request.Read -> {
+                response.put("visible", false)
+                response.put("payload", contentToJson(request.content))
+            }
+
+            BroadcastHandoff.Request.Visible -> response.put("visible", true)
+        }
+
+        invoke.resolve(response)
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /**
+     * The wire shape of a clipboard read, shared by [readClipboard] and
+     * [takeBroadcast] so both ends see the same `{"kind": …}` object that
+     * `ClipboardPayload` in `plugin.rs` expects.
+     *
+     * Base64 is only ever used across the JNI boundary; the network protocol
+     * carries raw PNG bytes.
+     */
+    private fun contentToJson(content: ClipboardAccess.Content): JSObject = when (content) {
+        is ClipboardAccess.Content.Text -> JSObject().apply {
+            put("kind", "text")
+            put("text", content.text)
+        }
+
+        is ClipboardAccess.Content.Image -> {
+            val encoded = content.bitmap.toPngBase64()
+            if (encoded == null) {
+                emptyPayload()
+            } else {
+                JSObject().apply {
+                    put("kind", "image")
+                    put("png", encoded)
+                    put("width", content.bitmap.width)
+                    put("height", content.bitmap.height)
+                }
+            }
+        }
+
+        ClipboardAccess.Content.Empty -> emptyPayload()
+    }
 
     private fun onMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)

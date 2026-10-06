@@ -45,5 +45,30 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          The "broadcast clipboard" notification action lands here.
+
+          - `Theme.Translucent.NoTitleBar` shows nothing while the window holds
+            the focus Android demands before it hands over the clipboard. It is
+            deliberately *not* a Dialog/floating theme: floating windows are not
+            focusable by default, and a window without focus cannot read the
+            clipboard, which would make the whole activity pointless.
+          - its own task affinity, plus `excludeFromRecents` and `noHistory`, so
+            it never joins the app's task, never shows up in the recents list,
+            and cannot be left behind invisible.
+          - `exported="false"`: only our own notification's PendingIntent may
+            start it, and it reads the clipboard.
+        -->
+        <activity
+            android:name="app.cm.clipmesh.bridge.broadcast.BroadcastActivity"
+            android:enabled="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity="app.cm.clipmesh.broadcast"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:finishOnTaskLaunch="true"
+            android:allowTaskReparenting="false" />
     </application>
 </manifest>

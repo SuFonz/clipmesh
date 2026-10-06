@@ -156,7 +156,6 @@ export interface CommandMap {
   android_service_running: { args: void; result: boolean };
   android_request_notification_permission: { args: void; result: boolean };
   android_leave_app: { args: void; result: void };
-  android_take_pending_broadcast: { args: void; result: boolean };
 }
 
 export type CommandName = keyof CommandMap;

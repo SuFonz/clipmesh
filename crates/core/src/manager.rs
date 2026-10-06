@@ -686,6 +686,29 @@ impl SyncManager {
             )
         })?;
 
+        self.send_explicit(content).await
+    }
+
+    /// Broadcast content that was already read from the clipboard.
+    ///
+    /// Split out of [`SyncManager::send_clipboard`] for the Android
+    /// notification action: the read happens inside a transparent activity that
+    /// holds focus for well under a second, and the result is handed to the
+    /// engine; re-reading it here would fail, and doing it on the activity's
+    /// behalf is the whole point of that activity.
+    ///
+    /// This is deliberately **not** `AndroidClipboardProvider::push`. A push
+    /// emits a clipboard *change*, and `handle_local_change` drops changes while
+    /// `autoSync` is off - so a notification button wired to
+    /// `push` would silently do nothing for exactly the users who turned
+    /// automatic sync off and therefore press it by hand. An explicit send is
+    /// what the user asked for and goes out either way. What still applies is
+    /// the content-kind policy: text and images can each be turned off.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Clipboard`] when the user has turned this kind of
+    /// content off in settings.
+    pub async fn send_explicit(self: &Arc<Self>, content: ClipboardContent) -> Result<SendOutcome> {
         if !self.settings.read().sync_policy().accepts(&content) {
             return Err(CoreError::Clipboard(
                 "this kind of content is turned off in settings".to_owned(),
@@ -1982,5 +2005,62 @@ mod tests {
         assert!(engine.history().is_empty());
         assert_eq!(store.forgotten_ids(), vec![image_id.clone()]);
         assert!(store.get(&image_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn an_explicit_send_ignores_auto_sync() {
+        // What the notification action does: the user pressed a button, so the
+        // content goes out even though automatic sync is off.
+        let engine = build_engine(None, None, 50);
+        engine
+            .update_settings(SettingsPatch {
+                auto_sync: Some(false),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap();
+
+        let outcome = engine
+            .send_explicit(text_content("pressed by hand"))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.delivered, 0, "the fake network goes nowhere");
+        assert_eq!(contents(&engine), ["pressed by hand"]);
+    }
+
+    #[tokio::test]
+    async fn an_explicit_send_still_honours_the_content_kinds() {
+        let engine = build_engine(None, None, 50);
+        engine
+            .update_settings(SettingsPatch {
+                sync_text: Some(false),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(engine.send_explicit(text_content("nope")).await.is_err());
+        assert!(engine.history().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pushed_change_is_dropped_when_auto_sync_is_off() {
+        // The reason `send_explicit` exists rather than reusing the provider's
+        // `push`: a change event is what the sync policy filters, and the
+        // notification button must not be filtered.
+        let engine = build_engine(None, None, 50);
+        engine
+            .update_settings(SettingsPatch {
+                auto_sync: Some(false),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap();
+        engine.start().await.unwrap();
+
+        engine.handle_local_change(text_content("ignored")).await;
+
+        assert!(engine.history().is_empty());
     }
 }

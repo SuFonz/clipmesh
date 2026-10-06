@@ -55,28 +55,17 @@ pub async fn android_service_running(state: State<'_, NativeState>) -> Ipc<bool>
     Ok(state.clipboard.host().is_foreground_service_running())
 }
 
-/// Send the app to the back of the task stack after a broadcast.
+/// Send the app to the back of the task stack after a visible broadcast.
 ///
-/// Android only lets an app read the clipboard while it has focus, so a
-/// broadcast started from the notification has to bring ClipMesh forward first.
-/// This is what turns that into a moment instead of a detour the user has to
-/// walk back from by hand.
+/// The notification's action normally reads the clipboard from a transparent
+/// activity that shows nothing, and the Rust host calls this itself when it has
+/// to fall back to bringing the real activity forward. This command is the same
+/// thing for the frontend, which is where a UI that wants to leave on purpose
+/// would call it.
 #[tauri::command]
 pub async fn android_leave_app(state: State<'_, NativeState>) -> Ipc<()> {
     let bridge = state.bridge.clone();
     bridge.leave_app().map_err(fail)
-}
-
-/// Whether the notification asked for a clipboard broadcast.
-///
-/// Answering `true` consumes the request. Android will not let a background app
-/// read the clipboard, so the notification action can only bring the activity
-/// forward and leave a note; this is how the UI picks that note up, once it is
-/// running and the clipboard is readable again.
-#[tauri::command]
-pub async fn android_take_pending_broadcast(state: State<'_, NativeState>) -> Ipc<bool> {
-    let bridge = state.bridge.clone();
-    bridge.take_pending_broadcast().map_err(fail)
 }
 
 /// Ask for the notification permission (Android 13 and later).
@@ -90,9 +79,11 @@ pub async fn android_request_notification_permission(state: State<'_, NativeStat
 
 /// Record clipboard content that Kotlin read for us.
 ///
-/// This is the other half of the "broadcast clipboard" notification action: the
-/// service reads the clipboard on the main thread and invokes this, which wakes
-/// the engine exactly as a desktop clipboard change would.
+/// This reports a **change**, not an explicit send: the engine's local change
+/// handling drops it while `autoSync` is off, which is right for something the
+/// platform noticed by itself and wrong for the notification's broadcast button.
+/// That button therefore goes through [`crate::broadcast`] and the engine's
+/// explicit send instead, and this command has no caller in the UI today.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn android_push_clipboard(
     state: State<'_, NativeState>,

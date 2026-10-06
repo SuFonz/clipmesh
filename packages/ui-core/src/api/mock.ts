@@ -892,10 +892,6 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
       // 真机上会把应用退回后台 —— 浏览器里没有对应动作，静默成功即可。
       requireAndroid();
       return undefined;
-    case "android_take_pending_broadcast":
-      // 浏览器里没有通知栏，永远不会有待处理的广播。
-      requireAndroid();
-      return false;
   }
 }
 

@@ -166,12 +166,30 @@ Kotlin ClipMeshPlugin.readClipboard  → ClipboardManager
 
 ```
 通知「Broadcast clipboard」
-  ↓  PendingIntent → MainActivity（带 ACTION_BROADCAST）
-  ↓  Android 10+ 禁止后台读剪贴板，所以必须先回到前台
-Kotlin onNewIntent → trigger("broadcast-clipboard")
+  ↓  PendingIntent → BroadcastActivity（透明主题，exported=false，独立 taskAffinity）
+  ↓  Android 10+ 只有前台应用能读剪贴板，所以需要一个能拿到焦点的窗口
+Kotlin BroadcastActivity.onWindowFocusChanged → ClipboardAccess.read
+  ↓  读到的内容（或"什么都没读到"）交给进程级 BroadcastHandoff
+Rust  broadcast::spawn 轮询 takeBroadcast（前台服务在跑时 500ms，否则 5s）
   ↓
-Vue 收到事件 → invoke("send_clipboard")
+Rust  engine.send_explicit(content)  → 对端
 ```
+
+通知按钮**不会**再打开可见界面，但 Activity 有三种失败可能，前两种会退回旧行为
+（把真正的 `MainActivity` 带到前台、广播完再 `moveTaskToBack`）：
+
+| 失败 | 表现 | 处理 |
+| --- | --- | --- |
+| 2 秒内拿不到窗口焦点 | 透明 Activity 已启动 | 回退：`ACTION_BROADCAST` 拉前台，`visible=true` |
+| 拿到焦点但剪贴板读不出内容 | 同上 | 同上 |
+| 通知的 `PendingIntent` 被 ROM 拦下（后台启动 Activity 限制） | 什么都没有发生 | **无法感知、无法补救**：应用侧拿不到任何回调，只能让用户用应用内那颗按钮 |
+
+回退路径由 Rust 收尾：读剪贴板（重试几次，窗口刚起来时读不到是正常的）、
+`send_explicit`、成功后再 `leaveApp()` 把用户送回原来的应用。
+
+`send_explicit` 而不是 `AndroidClipboardProvider::push`：`push` 发出的是一条"本地剪贴板
+变化"，引擎的 `handle_local_change` 会在 `autoSync` 关闭时把它丢掉 —— 而那正是会手动按
+这颗按钮的用户。
 
 Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运行时才报错）：
 
@@ -183,6 +201,8 @@ Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运
 | `showReceived` | `showReceived` |
 | `startService` / `stopService` / `serviceRunning` | 同名 |
 | `requestNotificationPermission` | `requestNotificationPermission` |
+| `leaveApp` | `leaveApp` |
+| `takeBroadcast` | `takeBroadcast` |
 
 Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 `ANDROID_PLUGIN_PACKAGE` / `ANDROID_PLUGIN_CLASS` 常量里。

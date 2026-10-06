@@ -204,6 +204,11 @@ impl<R: Runtime> NativeBridge<R> {
 
     /// Send the app to the back of the task stack.
     ///
+    /// The ending of the visible fallback: the notification's action normally
+    /// reads the clipboard from a transparent activity that shows nothing, but
+    /// when that cannot do its job the real activity is brought forward, and the
+    /// user has to land back in whatever they were doing.
+    ///
     /// # Errors
     /// Returns the JNI failure as a string.
     pub fn leave_app(&self) -> Result<(), String> {
@@ -213,21 +218,42 @@ impl<R: Runtime> NativeBridge<R> {
         Ok(())
     }
 
-    /// Whether the notification asked for a clipboard broadcast.
+    /// Collect a broadcast that the notification asked for, if any.
     ///
-    /// Answering `true` consumes the request.
+    /// Answering consumes the request: a second call answers `requested: false`
+    /// even if the user tapped twice in a row, because the first tap's request
+    /// is the one that matters.
     ///
     /// # Errors
     /// Returns the JNI failure as a string.
-    pub fn take_pending_broadcast(&self) -> Result<bool, String> {
-        #[derive(Deserialize)]
-        struct Pending {
-            requested: bool,
-        }
-
-        self.call::<Pending>("takePendingBroadcast", ())
-            .map(|response| response.requested)
+    pub fn take_broadcast(&self) -> Result<BroadcastPickup, String> {
+        self.call("takeBroadcast", ())
     }
+}
+
+/// What Kotlin answers when asked whether the notification asked for a broadcast.
+///
+/// `serviceRunning` is not about this request: the poller uses it to decide how
+/// often to ask at all, because the notification - the only thing that can start
+/// a request - is posted by that service and dies with it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BroadcastPickup {
+    /// Whether a broadcast was requested since the last call.
+    pub requested: bool,
+    /// Whether the user is looking at the app because of this request.
+    ///
+    /// `false` for the transparent path, which shows nothing and therefore has
+    /// nothing to leave afterwards; `true` for the fallback, which brought the
+    /// activity forward and has to put it back.
+    #[serde(default)]
+    pub visible: bool,
+    /// What the transparent activity read, when it managed to read anything.
+    #[serde(default)]
+    pub payload: Option<ClipboardPayload>,
+    /// Whether the foreground service is up.
+    #[serde(default)]
+    pub service_running: bool,
 }
 
 #[derive(Serialize)]
@@ -280,4 +306,85 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 pub fn bridge<R: Runtime>(app: &impl Manager<R>) -> Option<std::sync::Arc<NativeBridge<R>>> {
     app.try_state::<std::sync::Arc<NativeBridge<R>>>()
         .map(|state| std::sync::Arc::clone(&state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These pin the shapes `ClipMeshPlugin.takeBroadcast` resolves. The Kotlin
+    // half cannot be compiled here, so the JSON is the contract that has to be
+    // checked from this side - a renamed field would otherwise only fail on a
+    // device, where it fails silently: the poll would answer "nothing to do"
+    // forever and the notification button would stop working.
+
+    #[test]
+    fn an_idle_answer_says_so() {
+        // What Kotlin resolves when there is no request: the other keys are
+        // absent rather than null.
+        let pickup: BroadcastPickup =
+            serde_json::from_str(r#"{"requested":false,"serviceRunning":true}"#).unwrap();
+
+        assert!(!pickup.requested);
+        assert!(!pickup.visible);
+        assert!(pickup.payload.is_none());
+        assert!(pickup.service_running);
+    }
+
+    #[test]
+    fn a_read_answer_carries_its_content() {
+        let pickup: BroadcastPickup = serde_json::from_str(
+            r#"{"requested":true,"serviceRunning":true,"visible":false,
+                "payload":{"kind":"text","text":"from the phone"}}"#,
+        )
+        .unwrap();
+
+        assert!(pickup.requested);
+        assert!(!pickup.visible, "the transparent path shows nothing");
+        match pickup.payload {
+            Some(ClipboardPayload::Text { text }) => assert_eq!(text, "from the phone"),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_visible_answer_carries_no_content() {
+        // The fallback reads the clipboard through the activity instead, so the
+        // poll has to be able to tell the two apart without a payload.
+        let pickup: BroadcastPickup =
+            serde_json::from_str(r#"{"requested":true,"serviceRunning":true,"visible":true}"#)
+                .unwrap();
+
+        assert!(pickup.requested);
+        assert!(pickup.visible);
+        assert!(pickup.payload.is_none());
+    }
+
+    #[test]
+    fn an_image_answer_decodes_from_the_same_shape() {
+        use base64::Engine as _;
+
+        let png = vec![0x89, b'P', b'N', b'G'];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+        let json = format!(
+            r#"{{"requested":true,"serviceRunning":true,"visible":false,
+                 "payload":{{"kind":"image","png":"{encoded}","width":4,"height":5}}}}"#
+        );
+
+        let pickup: BroadcastPickup = serde_json::from_str(&json).unwrap();
+        let content = pickup
+            .payload
+            .expect("the payload is present")
+            .into_platform()
+            .unwrap();
+
+        assert_eq!(
+            content,
+            PlatformClipboard::Image {
+                png,
+                width: 4,
+                height: 5
+            }
+        );
+    }
 }

@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import {
   AppButton,
   AppIcon,
   StatusPill,
-  androidApi,
   isMock,
   sendClipboard,
   toMessage,
@@ -80,64 +79,33 @@ async function toggleEngine(): Promise<void> {
 
 const sending = ref(false);
 
-/** 读剪贴板、推给在线设备，并提示结果；返回是否成功。 */
-async function runBroadcast(): Promise<boolean> {
+/** 读剪贴板、推给在线设备，并提示结果。 */
+async function runBroadcast(): Promise<void> {
   sending.value = true;
   try {
     const result = await sendClipboard();
     toast.success(
       result.delivered > 0 ? `已广播到 ${result.delivered} 台设备` : "没有在线设备，已存入历史",
     );
-    return true;
   } catch (cause) {
     toast.error("广播失败", toMessage(cause));
-    return false;
   } finally {
     sending.value = false;
   }
 }
 
-/** 按钮：广播完留在应用里，用户没打算离开。 */
+/** 顶栏按钮：广播完留在应用里，用户没打算离开。 */
 async function broadcast(): Promise<void> {
   await runBroadcast();
 }
 
-/**
- * 通知栏那颗「广播剪贴板」的落点。
+/*
+ * 通知栏那颗「广播剪贴板」不在这里。
  *
- * 那颗按钮只能把应用带到前台 —— Android 10+ 不允许后台读剪贴板 —— 并在
- * `onNewIntent` 里留一个标记。这里取走它：广播一次，然后把用户送回他原来的应用。
- * 这就是"半无感"能做到的上限：应用必须露个面，但不会把人困住。
- *
- * 轮询放在**外壳**而不是首页，因为通知可能在任何标签页上被点开 —— 挂在首页的话
- * 用户在设置页时首页根本没挂载，请求就丢了。
+ * 它由透明 Activity 读剪贴板、再把结果交给 Rust 侧的轮询任务完成广播 —— 通知被点开
+ * 时应用在后台，这个 webview 可能根本没在跑，所以界面不能是唯一的取件人（两边同时
+ * 取件就会发两次）。前台可见的回退路径同样由那个任务收尾。
  */
-let pendingPoll: ReturnType<typeof setInterval> | undefined;
-
-async function collectPendingBroadcast(): Promise<void> {
-  let requested: boolean;
-  try {
-    requested = await androidApi.takePendingBroadcast();
-  } catch {
-    // 非 Android 平台（浏览器调试）没有这个命令。
-    return;
-  }
-  if (!requested) return;
-
-  if (await runBroadcast()) {
-    await androidApi.leaveApp().catch(() => undefined);
-  }
-}
-
-onMounted(() => {
-  pendingPoll = setInterval(() => {
-    void collectPendingBroadcast();
-  }, 500);
-});
-
-onBeforeUnmount(() => {
-  if (pendingPoll !== undefined) clearInterval(pendingPoll);
-});
 </script>
 
 <template>

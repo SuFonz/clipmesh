@@ -9,6 +9,8 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import app.cm.clipmesh.bridge.broadcast.BroadcastActivity
+import app.cm.clipmesh.bridge.mainActivityClass
 
 /**
  * Every notification ClipMesh shows.
@@ -87,17 +89,19 @@ object ClipMeshNotifications {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        // NOTE: this action brings the app to the foreground before the
-        // clipboard is read. Android 10+ forbids background clipboard reads
-        // outright, so a notification button that worked while the app stayed
-        // hidden is not implementable without an accessibility service - which
-        // would be a far bigger privacy ask than the feature is worth.
+        // NOTE: this opens a *transparent* activity, which reads the clipboard
+        // while it holds focus and shows the user nothing. Android 10+ forbids
+        // background clipboard reads outright, so a notification button that
+        // worked without any activity at all is not implementable without an
+        // accessibility service - a far bigger privacy ask than the feature is
+        // worth. If that activity cannot do its job it falls back to bringing
+        // the application forward, which is what this used to do directly.
         val broadcast = PendingIntent.getActivity(
             context,
             1,
-            Intent(context, mainActivityClass(context)).apply {
+            Intent(context, BroadcastActivity::class.java).apply {
                 action = ACTION_BROADCAST
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -152,14 +156,4 @@ object ClipMeshNotifications {
             android.util.Log.w("ClipMeshNotify", "notification permission is missing", error)
         }
     }
-
-    /**
-     * The application's launcher activity class, resolved by name.
-     *
-     * Resolved reflectively because this module is a library: it must not
-     * compile-depend on the generated application module, which would be a
-     * circular Gradle dependency.
-     */
-    private fun mainActivityClass(context: Context): Class<*> =
-        Class.forName("${context.packageName}.MainActivity")
 }

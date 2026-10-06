@@ -19,6 +19,7 @@
 
 #![warn(missing_docs)]
 
+pub mod broadcast;
 pub mod clipboard_host;
 pub mod commands;
 pub mod plugin;
@@ -96,9 +97,17 @@ pub fn run() {
                 );
             }
 
+            // The notification's broadcast action is collected by a task of its
+            // own rather than by the UI: it is requested while the app is in the
+            // background, where the only thing still running is this process
+            // behind the foreground service.
+            let broadcast_bridge = Arc::clone(&bridge);
+            let broadcast_clipboard = Arc::clone(&clipboard);
+
             app.manage(NativeState { clipboard, bridge });
 
-            clipmesh_desktop_lib::start_engine(handle, engine);
+            clipmesh_desktop_lib::start_engine(handle, Arc::clone(&engine));
+            broadcast::spawn(broadcast_bridge, broadcast_clipboard, engine);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -130,7 +139,6 @@ pub fn run() {
             commands::android_stop_service,
             commands::android_service_running,
             commands::android_leave_app,
-            commands::android_take_pending_broadcast,
             commands::android_request_notification_permission,
             commands::android_push_clipboard,
             commands::android_report_error,

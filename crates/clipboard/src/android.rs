@@ -9,14 +9,22 @@
 //! 2. Clipboard access must happen on the main thread, through a
 //!    `ClipboardManager` obtained from a `Context`.
 //!
-//! So the data flow is inverted: instead of polling, the Kotlin side pushes.
-//! The foreground service's notification carries a "broadcast clipboard" action;
-//! tapping it reads the clipboard on the main thread and calls
-//! [`AndroidClipboardProvider::push`]. Writing a received payload goes the other
-//! way, through [`AndroidClipboardHost`].
+//! So the data flow is inverted: nothing is polled for changes, the platform
+//! hands content over instead.
+//!
+//! The foreground service's notification carries a "broadcast clipboard"
+//! action. It opens a transparent activity, which reads the clipboard while it
+//! holds focus and leaves the result in a process-wide Kotlin holder; a Rust
+//! task in the Android host collects it and sends it explicitly. A read that
+//! really is a *change* - rather than a button press - can still be handed over
+//! with [`AndroidClipboardProvider::push`], which is what the engine's local
+//! change handling expects.
 //!
 //! ```text
-//!   notification action ──► Kotlin reads clipboard ──► push()  ──► engine
+//!   notification action ──► BroadcastActivity reads ──► Rust collects
+//!                                                        │
+//!                                    send_explicit() ◄────┘  ──► peers
+//!   a platform read that is a change ──► push() ──► engine (autoSync applies)
 //!   engine ──► write() ──► AndroidClipboardHost ──► Kotlin ClipboardManager
 //! ```
 //!
@@ -140,15 +148,33 @@ impl AndroidClipboardProvider {
 
     /// Record content the platform read for us.
     ///
-    /// This is the entry point behind the notification's "broadcast clipboard"
-    /// button. It emits a change event, which is what makes the engine pick the
-    /// content up and send it - exactly as if the desktop watcher had fired.
+    /// This emits a clipboard *change*, which the engine treats exactly as if
+    /// the desktop watcher had fired - including the `autoSync` check in
+    /// `handle_local_change`. The Android notification action therefore does
+    /// **not** go through here: it uses [`AndroidClipboardProvider::stage`] plus
+    /// an explicit send, so that pressing the button works with automatic sync
+    /// off. This remains the entry point for a read that really is a change.
     pub fn push(&self, payload: PlatformClipboard) {
-        if let Some(content) = self.convert(payload) {
-            *self.last.lock() = Some(content.clone());
+        if let Some(content) = self.stage(payload) {
             // A send error only means nobody is listening right now.
             let _ = self.events.send(ClipboardEvent::Changed(content));
         }
+    }
+
+    /// Convert platform content and remember it as the current clipboard,
+    /// without reporting a change.
+    ///
+    /// Returns `None` for content ClipMesh does not carry, which is also what
+    /// an Android background read returns.
+    ///
+    /// Used by the notification path, which has already read the clipboard in a
+    /// focused activity and must send the result explicitly rather than as a
+    /// policy-filtered change. Caching it keeps [`ClipboardProvider::read`]
+    /// consistent with what was just read, the same way [`Self::push`] does.
+    pub fn stage(&self, payload: PlatformClipboard) -> Option<ClipboardContent> {
+        let content = self.convert(payload)?;
+        *self.last.lock() = Some(content.clone());
+        Some(content)
     }
 
     /// Turn platform content into protocol content.
@@ -372,6 +398,43 @@ mod tests {
 
         let event = events.next().await.unwrap();
         assert!(matches!(event, ClipboardEvent::Changed(_)));
+    }
+
+    #[tokio::test]
+    async fn staging_records_content_without_waking_the_watcher() {
+        let (provider, host) = provider();
+        // The notification path: a focused activity has just read the
+        // clipboard, and the engine is going to send it explicitly. It must not
+        // also turn up as a local change, which autoSync could filter out.
+        host.refuse_reads
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut events = provider.watch();
+
+        let staged = provider.stage(PlatformClipboard::Text("from the button".into()));
+
+        match staged {
+            Some(ClipboardContent::Text(payload)) => assert_eq!(payload.content, "from the button"),
+            other => panic!("expected text, got {other:?}"),
+        }
+        assert!(events.next().now_or_never().is_none());
+
+        // The cached value is what a read falls back to while the app is in the
+        // background and the platform refuses one.
+        match provider.read().await.unwrap().unwrap() {
+            ClipboardContent::Text(payload) => assert_eq!(payload.content, "from the button"),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn staging_empty_content_yields_nothing() {
+        let (provider, _host) = provider();
+        assert!(provider.stage(PlatformClipboard::Empty).is_none());
+        assert!(
+            provider
+                .stage(PlatformClipboard::Text(String::new()))
+                .is_none()
+        );
     }
     #[tokio::test]
     async fn writing_goes_through_the_platform_host() {
