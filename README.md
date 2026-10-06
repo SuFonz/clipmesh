@@ -97,53 +97,166 @@ clipmesh/
 
 ### Requirements
 
-Rust 1.85+ · Node 20+ · (Android additionally needs JDK 17+, the Android SDK and the NDK)
+| Component | Version | Notes |
+| --- | --- | --- |
+| Rust | **1.85+** (edition 2024) | `rustup default stable` |
+| Node.js | **20+** | Frontend and npm workspaces |
+| JDK | **17+** | Android only |
+| Android SDK | compileSdk **37** | Android only |
+| Android NDK | **26+** | Android only |
 
-> **What has actually been built.** Building **on Windows** produces both a working Windows app and
-> a working Android APK, and that is the combination that has been verified. All three desktop
-> platforms are wired up (see [`docs/BUILD.md`](docs/BUILD.md) and the per-platform bundle configs
-> `apps/desktop/src-tauri/tauri.*.conf.json`), and the code that differs per platform is confined to
-> `crates/clipboard` — but **the Linux and macOS builds have never been run**. Treat those as
-> untested rather than as known working.
+**`protoc` is not needed.** Protocol compilation goes through `protox` (a pure Rust implementation),
+so a freshly cloned machine can build with nothing but a Rust toolchain — the same holds for CI and cross-compilation hosts.
+
+The crypto backend is pinned to **ring**: `rustls` and `tokio-rustls` both have their default features
+explicitly disabled, so `aws-lc-rs` does not drag in a C toolchain / cmake / NASM. Do not turn their
+`default-features` back on in `Cargo.toml` — that enables both providers at once, and
+`ServerConfig::builder()` panics at runtime.
+
+> **What has actually been verified.** Only the **Windows** build environment has been exercised:
+> building on Windows produces both a working Windows app and a working Android APK. **No other
+> combination has been verified** — all three desktop platforms are wired up (see the per-platform
+> bundle configs `apps/desktop/src-tauri/tauri.*.conf.json`) and the code that differs per platform is
+> confined to `crates/clipboard`, but the Linux and macOS desktop builds have never been run. Treat
+> those as untested rather than as known working.
+
+### First-time install
+
+```bash
+npm install            # repo root, installs every workspace in one go
+cargo fetch            # optional: warm the crates cache
+```
+
+> **Note**: the repo root has an `.npmrc` whose contents are `include=dev`.
+> Some environments export `NODE_ENV=production`, which makes npm skip every devDependency by default,
+> so the install finishes but the build cannot run (no vite / vue-tsc / tauri CLI).
+> If you do not want that file, delete it and then use `npm install --include=dev`.
 
 ### Desktop
 
-```bash
-npm install                       # install frontend dependencies (npm workspaces)
-npm run build:desktop:ui          # build the desktop frontend first (required, see below)
-npm run dev:desktop               # tauri dev: builds Rust and opens the window
-```
-
-> `tauri.conf.json`'s `frontendDist` points at `apps/desktop/ui/dist`, and
-> `tauri::generate_context!()` reads that directory **at compile time** — when the
-> directory does not exist, `cargo build` fails outright. So the frontend build has to
-> run once before any Rust build.
-
-Only want to look at the UI? **You do not need to compile Rust**:
+#### Development
 
 ```bash
-npm run dev:desktop:ui                   # http://localhost:1420
+npm run dev:desktop        # = tauri dev
 ```
 
-When no Tauri runtime is detected, the frontend switches to the built-in mock backend by itself,
-showing three sample devices and history, with every interaction clickable. See
+Tauri will:
+1. Run `beforeDevCommand` in `apps/desktop/`: `npm --prefix ui run dev` (Vite, port 1420, `strictPort`)
+2. Compile `apps/desktop/src-tauri` (about 3–10 minutes the first time, incremental afterwards)
+3. Open a window pointed at `http://localhost:1420`
+
+#### Frontend only (no Rust compile)
+
+```bash
+npm run dev:desktop:ui
+```
+
+Open <http://localhost:1420> in a browser. When no Tauri runtime is detected
+(`__TAURI_INTERNALS__` is absent), `packages/ui-core/src/api/transport.ts` switches to the built-in
+mock backend by itself: three sample devices and history, with every interaction clickable and fake
+events that change on their own. Good for UI work. See
 [`packages/ui-core/src/api/mock.ts`](packages/ui-core/src/api/mock.ts).
+
+#### Packaging
+
+```bash
+npm run build:desktop:ui     # ui/dist has to be generated first
+npm run build:desktop        # = tauri build
+```
+
+The artifacts land in the workspace target directory at the repo root: `target/release/bundle/`.
+
+> `tauri.conf.json`'s `frontendDist` is `../ui/dist`,
+> i.e. `apps/desktop/ui/dist`. `tauri::generate_context!()` reads that directory at compile time,
+> so **`cargo build` fails when the directory does not exist**. That is why, before a Rust-only
+> `cargo check`, the frontend build has to run at least once. `dist/` is in `.gitignore`, so a fresh clone must build it itself.
+
+#### Development logging
+
+```bash
+CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
+```
 
 ### Android
 
-```bash
-npm run dev:android               # tauri android dev
+The Gradle module wiring — the four places in `gen/android` that `tauri android init` does not
+reproduce — is in [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §1.
+
+#### Environment variables
+
+```powershell
+$env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # or the jbr bundled with Android Studio
+$env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
+$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 ```
 
-The full Android build steps (NDK variables, Gradle module wiring) are in [`docs/BUILD.md`](docs/BUILD.md).
+Tauri also reads `TAURI_ANDROID_PROJECT_PATH` (defaults to `src-tauri/gen/android`).
 
-### Tests
+**Release signing.** `app/build.gradle.kts` takes the signing material from four values read *outside* the repository — a Gradle property first, then the environment variable. Putting them in the **global** `~/.gradle/gradle.properties` keeps them out of this project entirely, and out of `git status`:
+
+```properties
+KEYSTORE_FILE=C:\\path\\to\\store.keystore
+KEYSTORE_PASSWORD=…
+KEY_ALIAS=…
+KEY_PASSWORD=…
+```
+
+| Variable | Meaning |
+| --- | --- |
+| `KEYSTORE_FILE` | path to the `.jks` / `.keystore` — absolute, or relative to `app/` |
+| `KEYSTORE_PASSWORD` | keystore password |
+| `KEY_ALIAS` | the key's alias inside the keystore |
+| `KEY_PASSWORD` | that key's password |
+
+**Only release builds need them.** Debug builds — `npm run dev:android`, `assembleDebug` — sign with the debug key and ignore all four. If any of them is missing for a release build, the build still configures and completes, but the APK/AAB comes out **unsigned and cannot be installed**; Gradle prints a warning naming the ones that are missing.
+
+> Android refuses to install an update whose signing key differs from the installed app's. Working around that means uninstalling first — and uninstalling deletes the app's private directory, which is where this device's identity lives. Every existing pairing is invalidated and has to be redone. Keep the release keystore, and back it up.
+
+#### Rust target
 
 ```bash
-cargo test --workspace            # Rust: protocol / identity / security / engine / network / clipboard
-npm run typecheck                 # frontend type check
-npm run build:ui                  # build the frontend for both apps
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 ```
+
+#### Running and packaging
+
+```bash
+npm run dev:android              # = tauri android dev
+npm run build:android:release    # = tauri android build  ->  signed APK / AAB
+```
+
+### Quality gate
+
+Everything here should pass before committing:
+
+```bash
+cargo test --workspace                        # Rust: protocol / identity / security / engine / network / clipboard
+cargo clippy --workspace --all-targets        # recommended
+npm run typecheck                             # frontend type check
+npm run build:ui                              # build the frontend for both apps
+```
+
+`cargo test --workspace` also compiles `apps/android/src-tauri`,
+but it does **not** run Gradle — the Android Java/Kotlin side has to be verified on a real device or emulator,
+or with `cd apps/android/src-tauri/gen/android && ./gradlew :bridge:assembleDebug`.
+
+### Troubleshooting
+
+| Symptom | Cause / what to do |
+| --- | --- |
+| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | Run `npm run build:desktop:ui` first |
+| `Could not automatically determine the process-level CryptoProvider` | `rustls`'s `default-features` was turned on, which enables ring and aws-lc-rs at the same time. See **Requirements** above |
+| Devices cannot discover each other | Check whether the firewall allows UDP 5353 (mDNS) and TCP 47711; some corporate Wi-Fi networks disable multicast |
+| Port 47711 is already in use | Normal: it falls back to an ephemeral port and advertises the real port over mDNS |
+| Still not syncing after pairing | Check `autoSync` / `syncText` / `syncImages` in the settings; make sure the other side shows as "online" in the device list |
+| Android no longer syncs in the background | Check whether the foreground service is running (there is a switch on the settings page) and whether notification permission has been granted |
+| Tapping "Broadcast clipboard" on Android jumps to the foreground | Expected behaviour, see [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §2 |
+| No vite after `npm install` | See the `.npmrc` note in **First-time install** above |
+| Gradle cannot find `:bridge` | `gen/android` was regenerated; add all four places back as described in [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §1 |
+| A **release** build fails with ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` when writing the clipboard (or the image, or showing the notification) | R8 stripped an argument class that `Invoke.parseArgs` deserialises by reflection. `apps/android/plugins/bridge/consumer-rules.pro` keeps them; if a new parameterised `@Command` was added, its argument class has to be added there too. See [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §3 |
+| Content sits under the status or navigation bar | The webview is not inset. `env(safe-area-inset-*)` cannot fix it on Android (see [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §4) — check that place ④ from [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) §1 is still in `MainActivity.kt`, and that the mobile layout has not added `env()` back on top of it |
+| `Error: The string "--" is not allowed in comments` (`mergeUniversalDebugResources`) | Two consecutive hyphens appear **inside a comment** in one of the `res/values/*.xml` files. The XML spec forbids that, and aapt2 only reports it during resource merging, at a position far from the real one. This repo hit it once: a comment in `ic_launcher_background.xml` contained `npm run icons -- --bg ...`. `scripts/update-icons.mjs` now has an assertion that stops this regression |
+| `SigningConfig`/`compileSdk` mismatch | The plugin module's `compileSdk`/Java version must match `app/build.gradle.kts` (currently 37 / Java 8) |
 
 ## First run
 
@@ -175,7 +288,7 @@ foreground and reads it there. That is the design, not a compromise.
 | --- | --- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Architecture, module responsibilities, threat model, data flow |
 | [`docs/IPC.md`](docs/IPC.md) | The frozen frontend ↔ Rust contract (commands, events, types) |
-| [`docs/BUILD.md`](docs/BUILD.md) | Build, packaging, Android wiring, troubleshooting |
+| [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) | Android plugin wiring, R8 keep rules, edge-to-edge insets, data locations, changing the app icon |
 
 ## Protocol version
 

@@ -25,7 +25,7 @@ ClipMesh 让你在**自己的**设备之间同步剪贴板：在笔记本上复�
      │          │   TCP + TLS 1.3 (mTLS)  │          │
      │          │◄───────────────────────►│          │
      └──────────┘   剪贴板 / 图片 / 配对    └──────────┘
-             没有服务器。没有第三方。
+              没有服务器。没有第三方。
 ```
 
 ## 截图
@@ -95,50 +95,164 @@ clipmesh/
 
 ### 环境要求
 
-Rust 1.85+ · Node 20+ · （Android 另需 JDK 17+、Android SDK、NDK）
+| 组件 | 版本 | 说明 |
+| --- | --- | --- |
+| Rust | **1.85+**（edition 2024） | `rustup default stable` |
+| Node.js | **20+** | 前端与 npm workspaces |
+| JDK | **17+** | 仅 Android |
+| Android SDK | compileSdk **37** | 仅 Android |
+| Android NDK | **26+** | 仅 Android |
 
-> **实际构建过的是哪些。** **在 Windows 上**构建能同时产出可用的 Windows 程序和 Android APK，
-> 这是唯一验证过的组合。三个桌面平台都已接线（见 [`docs/BUILD.md`](docs/BUILD.md)，以及按平台
-> 区分的打包配置 `apps/desktop/src-tauri/tauri.*.conf.json`），平台相关的代码也只集中在
-> `crates/clipboard` —— 但 **Linux 和 macOS 的构建从未跑起来过**。**请当作未验证，而不是已知可用。**
+**不需要 `protoc`。** 协议编译走 `protox`（纯 Rust 实现），
+因此全新克隆的机器只要有 Rust 工具链就能构建，CI 与交叉编译宿主都一样。
+
+加密后端固定为 **ring**：`rustls` 与 `tokio-rustls` 都显式关闭了默认特性，
+避免 `aws-lc-rs` 引入 C 工具链 / cmake / NASM。请勿在 `Cargo.toml` 里
+把它们的 `default-features` 打开 —— 那会同时启用两个 provider，
+`ServerConfig::builder()` 会在运行时 panic。
+
+> **实际验证过的组合。** 只有 **Windows** 构建环境跑通过：在 Windows 上构建能同时产出
+> 可用的 Windows 程序和 Android APK。**其他组合都未经验证** —— 三个桌面平台都已接线
+> （见按平台的打包配置 `apps/desktop/src-tauri/tauri.*.conf.json`），平台相关的代码也只集中在
+> `crates/clipboard`，但 **Linux 和 macOS 的构建从未跑起来过**。
+> **请当作未验证，而不是已知可用。**
+
+### 首次安装
+
+```bash
+npm install            # 仓库根目录，一次装齐所有 workspace
+cargo fetch            # 可选：预热 crates 缓存
+```
+
+> **注意**：本仓库根目录有一个 `.npmrc`，内容是 `include=dev`。
+> 某些环境会导出 `NODE_ENV=production`，让 npm 默认跳过全部 devDependencies，
+> 结果是装完却无法构建（没有 vite / vue-tsc / tauri CLI）。
+> 如果不想要这个文件，删掉后请用 `npm install --include=dev`。
 
 ### 桌面端
 
-```bash
-npm install                       # 安装前端依赖（npm workspaces）
-npm run build:desktop:ui          # 先构建桌面前端（必需，见下）
-npm run dev:desktop               # tauri dev：构建 Rust 并打开窗口
-```
-
-> `tauri.conf.json` 的 `frontendDist` 指向 `apps/desktop/ui/dist`，
-> 而 `tauri::generate_context!()` 在**编译期**读取该目录 —— 目录不存在时
-> `cargo build` 会直接失败。所以在任何 Rust 构建之前，都要先跑一次前端构建。
-
-只想看界面？**不需要编译 Rust**：
+#### 开发
 
 ```bash
-npm run dev:desktop:ui                   # http://localhost:1420
+npm run dev:desktop        # = tauri dev
 ```
 
-未检测到 Tauri 运行时，前端会自动切到内置的 mock 后端，
-显示三台示例设备与历史记录，所有交互都可点。见
+Tauri 会：
+1. 在 `apps/desktop/` 下执行 `beforeDevCommand`：`npm --prefix ui run dev`（Vite，端口 1420，`strictPort`）
+2. 编译 `apps/desktop/src-tauri`（首次约 3–10 分钟，之后为增量编译）
+3. 打开指向 `http://localhost:1420` 的窗口
+
+#### 只看前端（不编译 Rust）
+
+```bash
+npm run dev:desktop:ui
+```
+
+浏览器打开 <http://localhost:1420>。检测不到 Tauri 运行时（没有 `__TAURI_INTERNALS__`）时，
+`packages/ui-core/src/api/transport.ts` 会自动切到内置的 mock 后端：三台示例设备与历史记录，
+所有交互都可点，假事件会自己变化。适合调 UI。见
 [`packages/ui-core/src/api/mock.ts`](packages/ui-core/src/api/mock.ts)。
+
+#### 打包
+
+```bash
+npm run build:desktop:ui     # 必须先生成 ui/dist
+npm run build:desktop        # = tauri build
+```
+
+产物在仓库根的工作区 target 目录：`target/release/bundle/`。
+
+> `tauri.conf.json` 的 `frontendDist` 是 `../ui/dist`，
+> 即 `apps/desktop/ui/dist`。`tauri::generate_context!()` 在编译期读取该目录，
+> **目录不存在时 `cargo build` 会失败**。所以纯 Rust 的 `cargo check` 之前，
+> 至少要跑一次前端构建。`dist/` 在 `.gitignore` 里，全新克隆必须自己构建一次。
+
+#### 开发日志
+
+```bash
+CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
+```
 
 ### Android
 
-```bash
-npm run dev:android               # tauri android dev
+Gradle 模块接线 —— `gen/android` 里四处 `tauri android init` 不会复现的改动 —— 见
+[`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §1。
+
+#### 环境变量
+
+```powershell
+$env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # 或 Android Studio 自带 jbr
+$env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
+$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 ```
 
-完整的 Android 构建步骤（NDK 变量、Gradle 模块接线）见 [`docs/BUILD.md`](docs/BUILD.zh-CN.md)。
+Tauri 还会读 `TAURI_ANDROID_PROJECT_PATH`（默认 `src-tauri/gen/android`）。
 
-### 测试
+**release 签名。** `app/build.gradle.kts` 从**仓库之外**的四个值取签名材料 —— 先查 Gradle 属性，再查环境变量。放进**全局**的 `~/.gradle/gradle.properties` 就不会进这个项目，也不会出现在 `git status` 里：
+
+```properties
+KEYSTORE_FILE=C:\\path\\to\\store.keystore
+KEYSTORE_PASSWORD=…
+KEY_ALIAS=…
+KEY_PASSWORD=…
+```
+
+| 变量 | 含义 |
+| --- | --- |
+| `KEYSTORE_FILE` | `.jks` / `.keystore` 的路径 —— 绝对路径，或相对 `app/` 的路径 |
+| `KEYSTORE_PASSWORD` | 密钥库口令 |
+| `KEY_ALIAS` | 库中密钥的别名 |
+| `KEY_PASSWORD` | 该密钥的口令 |
+
+**只有 release 需要它们。** debug 构建 —— `npm run dev:android`、`assembleDebug` —— 用 debug 密钥签名，四个值一个都不看。release 构建缺任何一个都能配置成功、也能跑完，但产物是**未签名的 APK/AAB，装不上**；Gradle 会打印警告，列出缺的是哪几个。
+
+> 签名密钥与已安装应用不一致时，Android 会拒绝安装这次更新。绕过它就得先卸载 —— 而卸载会删掉应用的私有目录，这台设备的身份就在那里。**所有已配对的关系都会失效，必须重新配对。** 请保管好 release 密钥库并做好备份。
+
+#### Rust target
 
 ```bash
-cargo test --workspace            # Rust：协议 / 身份 / 安全 / 引擎 / 网络 / 剪贴板
-npm run typecheck                 # 前端类型检查
-npm run build:ui                  # 构建两端前端
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 ```
+
+#### 运行与打包
+
+```bash
+npm run dev:android              # = tauri android dev
+npm run build:android:release    # = tauri android build  ->  已签名的 APK / AAB
+```
+
+### 质量门
+
+提交前应当全部通过：
+
+```bash
+cargo test --workspace                        # Rust：协议 / 身份 / 安全 / 引擎 / 网络 / 剪贴板
+cargo clippy --workspace --all-targets        # 建议
+npm run typecheck                             # 前端类型检查
+npm run build:ui                              # 构建两端前端
+```
+
+`cargo test --workspace` 会一并编译 `apps/android/src-tauri`，
+但**不会**执行 Gradle —— Android 的 Java/Kotlin 侧需要在真机或模拟器上验证，
+或用 `cd apps/android/src-tauri/gen/android && ./gradlew :bridge:assembleDebug`。
+
+### 故障排查
+
+| 现象 | 原因 / 处理 |
+| --- | --- |
+| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | 先跑 `npm run build:desktop:ui` |
+| `Could not automatically determine the process-level CryptoProvider` | `rustls` 的 `default-features` 被打开了，同时启用了 ring 与 aws-lc-rs。见上面的**环境要求** |
+| 设备互相发现不了 | 检查防火墙是否放行 UDP 5353（mDNS）与 TCP 47711；某些企业 Wi-Fi 禁用组播 |
+| 端口 47711 被占用 | 正常：会自动改用临时端口并通过 mDNS 广播真实端口 |
+| 配对后仍不同步 | 检查设置里的 `autoSync` / `syncText` / `syncImages`；确认设备列表里对方是「在线」 |
+| Android 后台不再同步 | 检查前台服务是否在运行（设置页有开关），以及通知权限是否授予 |
+| Android 点「广播剪贴板」跳到前台 | 预期行为，见 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §2 |
+| `npm install` 后没有 vite | 见上面**首次安装**里的 `.npmrc` 说明 |
+| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §1 补回四处 |
+| **release** 构建在写剪贴板（或图片、通知）时报 ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` | R8 删掉了 `Invoke.parseArgs` 用反射反序列化的参数类。`apps/android/plugins/bridge/consumer-rules.pro` 负责保住它们；如果新加了带参数的 `@Command`，要把它一起加进去。见 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §3 |
+| 内容被状态栏或导航栏盖住 | webview 没让开。在 Android 上 `env(safe-area-inset-*)` 解决不了（见 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §4）—— 先确认 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) §1 的第 ④ 处还在 `MainActivity.kt` 里，再确认移动端布局没有把 `env()` 加回来 |
+| `Error: 注释中不允许出现字符串 "--"`（`mergeUniversalDebugResources`） | 某个 `res/values/*.xml` 的**注释里出现了两个连续的连字符**。XML 规范禁止这种写法，而 aapt2 只在资源合并阶段才报，报错位置还很靠后。本仓库踩过一次：`ic_launcher_background.xml` 的注释里写了 `npm run icons -- --bg ...`。`scripts/update-icons.mjs` 现在有断言拦住这个回归 |
+| `SigningConfig`/`compileSdk` 不一致 | 插件模块的 `compileSdk`/Java 版本必须与 `app/build.gradle.kts` 一致（当前 37 / Java 8） |
 
 ## 首次使用
 
@@ -169,7 +283,7 @@ Android 的后台剪贴板限制是系统级约束：**没有**合法办法让�
 | --- | --- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.zh-CN.md) | 架构、模块职责、威胁模型、数据流 |
 | [`docs/IPC.md`](docs/IPC.zh-CN.md) | 前端 ↔ Rust 的冻结契约（命令、事件、类型） |
-| [`docs/BUILD.md`](docs/BUILD.zh-CN.md) | 构建、打包、Android 接线、故障排查 |
+| [`docs/MAINTENANCE.md`](docs/MAINTENANCE.zh-CN.md) | Android 插件接线、R8 keep 规则、edge-to-edge 留白、数据位置、更换应用图标 |
 
 ## 协议版本
 

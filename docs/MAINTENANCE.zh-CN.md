@@ -1,134 +1,20 @@
-# 构建与发布
+# 维护须知
 
-[English](BUILD.md) | **简体中文**
+[English](MAINTENANCE.md) | **简体中文**
 
-本文件覆盖：桌面端打包、Android 构建与原生插件接线，以及常见故障排查。
+本文件覆盖**改动这份代码之前**需要知道的东西：`tauri android init` 不会复现的 `gen/android`
+接线、Rust ↔ Kotlin 桥、R8 keep 规则、edge-to-edge 留白、数据存放位置，以及怎么换应用图标。
 
----
-
-## 1. 环境要求
-
-| 组件 | 版本 | 说明 |
-| --- | --- | --- |
-| Rust | **1.85+**（edition 2024） | `rustup default stable` |
-| Node.js | **20+** | 前端与 npm workspaces |
-| JDK | **17+** | 仅 Android |
-| Android SDK | compileSdk **37** | 仅 Android |
-| Android NDK | **26+** | 仅 Android |
-
-**不需要 `protoc`。** 协议编译走 `protox`（纯 Rust 实现），
-因此全新克隆的机器只要有 Rust 工具链就能构建，CI 与交叉编译宿主都一样。
-
-加密后端固定为 **ring**：`rustls` 与 `tokio-rustls` 都显式关闭了默认特性，
-避免 `aws-lc-rs` 引入 C 工具链 / cmake / NASM。请勿在 `Cargo.toml` 里
-把它们的 `default-features` 打开 —— 那会同时启用两个 provider，
-`ServerConfig::builder()` 会在运行时 panic。
+构建与运行见 [`README.md`](../README.zh-CN.md)。
 
 ---
 
-## 2. 首次安装
-
-```bash
-npm install            # 仓库根目录，一次装齐所有 workspace
-cargo fetch            # 可选：预热 crates 缓存
-```
-
-> **注意**：本仓库根目录有一个 `.npmrc`，内容是 `include=dev`。
-> 某些环境会导出 `NODE_ENV=production`，让 npm 默认跳过全部 devDependencies，
-> 结果是装完却无法构建（没有 vite / vue-tsc / tauri CLI）。
-> 如果不想要这个文件，删掉后请用 `npm install --include=dev`。
-
----
-
-## 3. 桌面端
-
-### 开发
-
-```bash
-npm run dev:desktop        # = tauri dev
-```
-
-Tauri 会：
-1. 在 `apps/desktop/` 下执行 `beforeDevCommand`：`npm --prefix ui run dev`（Vite，端口 1420，`strictPort`）
-2. 编译 `apps/desktop/src-tauri`（首次约 3–10 分钟，之后为增量编译）
-3. 打开指向 `http://localhost:1420` 的窗口
-
-### 只看前端（不编译 Rust）
-
-```bash
-npm run dev:desktop:ui
-```
-
-浏览器打开 <http://localhost:1420>。检测不到 `__TAURI_INTERNALS__` 时，
-`packages/ui-core/src/api/transport.ts` 会自动回落到 `api/mock.ts`，
-提供三台示例设备、历史记录和会自己变化的假事件。适合调 UI。
-
-### 打包
-
-```bash
-npm run build:desktop:ui     # 必须先生成 ui/dist
-npm run build:desktop        # = tauri build
-```
-
-产物在仓库根的工作区 target 目录：`target/release/bundle/`。
-
-> `tauri.conf.json` 的 `frontendDist` 是 `../ui/dist`，
-> 即 `apps/desktop/ui/dist`。`tauri::generate_context!()` 在编译期读取该目录，
-> **目录不存在时 `cargo build` 会失败**。所以纯 Rust 的 `cargo check` 之前，
-> 至少要跑一次前端构建。`dist/` 在 `.gitignore` 里，全新克隆必须自己构建一次。
-
-### 开发日志
-
-```bash
-CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
-```
-
----
-
-## 4. Android
-
-### 4.1 环境变量
-
-```powershell
-$env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # 或 Android Studio 自带 jbr
-$env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
-$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
-```
-
-Tauri 还会读 `TAURI_ANDROID_PROJECT_PATH`（默认 `src-tauri/gen/android`）。
-
-**release 签名。** `app/build.gradle.kts` 从**仓库之外**的四个值取签名材料 —— 先查 Gradle 属性，再查环境变量。放进**全局**的 `~/.gradle/gradle.properties` 就不会进这个项目，也不会出现在 `git status` 里：
-
-```properties
-KEYSTORE_FILE=C:\\path\\to\\store.keystore
-KEYSTORE_PASSWORD=…
-KEY_ALIAS=…
-KEY_PASSWORD=…
-```
-
-| 变量 | 含义 |
-| --- | --- |
-| `KEYSTORE_FILE` | `.jks` / `.keystore` 的路径 —— 绝对路径，或相对 `app/` 的路径 |
-| `KEYSTORE_PASSWORD` | 密钥库口令 |
-| `KEY_ALIAS` | 库中密钥的别名 |
-| `KEY_PASSWORD` | 该密钥的口令 |
-
-**只有 release 需要它们。** debug 构建 —— `npm run dev:android`、`assembleDebug` —— 用 debug 密钥签名，四个值一个都不看。release 构建缺任何一个都能配置成功、也能跑完，但产物是**未签名的 APK/AAB，装不上**；Gradle 会打印警告，列出缺的是哪几个。
-
-> 签名密钥与已安装应用不一致时，Android 会拒绝安装这次更新。绕过它就得先卸载 —— 而卸载会删掉应用的私有目录，这台设备的身份就在那里。**所有已配对的关系都会失效，必须重新配对。** 请保管好 release 密钥库并做好备份。
-
-### 4.2 Rust target
-
-```bash
-rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-```
-
-### 4.3 原生插件接线（重要）
+## 1. 原生插件接线（重要）
 
 Kotlin 插件在 `apps/android/plugins/bridge/`，是**独立的 Gradle library 模块**，
 不在 `gen/android` 里 —— 这样重新执行 `tauri android init` 不会覆盖它。
 
-除 README 之外，`gen/android` 里有**四处**需要手工维护，都**已经写入仓库**，此处记录是为了说明为什么：
+除 README 里的构建步骤之外，`gen/android` 里有**四处**需要手工维护，都**已经写入仓库**，此处记录是为了说明为什么：
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -163,20 +49,21 @@ dependencies {
 
 **③ 同一个文件 —— release 签名**
 
-`signingConfigs` 块，以及 `buildTypes.release` 里的 `signingConfig = …` 那一行，见 §4.1。
+`signingConfigs` 块，以及 `buildTypes.release` 里的 `signingConfig = …` 那一行，见
+[`README.zh-CN.md`](../README.zh-CN.md) 的 Android「环境变量」一节。
 Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 release 是未签名的，直到把它们补回去。
 
 **④ `apps/android/src-tauri/gen/android/app/src/main/java/app/cm/clipmesh/MainActivity.kt`**
 
 让网页内容避开系统栏。生成出来的项目里没有任何东西做这件事：`enableEdgeToEdge()` 让 webview 铺满整块屏幕
 （而 `targetSdk = 35` 之后，就算删掉这行调用，系统也照样强制 edge-to-edge），所以 `onWebViewCreate` 用
-`systemBars() | displayCutout()` 给 webview 的父容器（内容帧）加内边距。见 §4.7 —— 代码很短，但它是底部
+`systemBars() | displayCutout()` 给 webview 的父容器（内容帧）加内边距。见 §4 —— 代码很短，但它是底部
 标签栏和导航键之间唯一的那道防线。
 
 > 如果重新生成了 `gen/android`（删除后跑 `tauri android init`），
 > **上面四处**都需要重新加上。这些是仅有的、需要手工维护的生成文件改动。
 > （`apps/android/plugins/bridge/consumer-rules.pro` 故意**不在**这份清单里：它是 R8 keep 规则而不是接线，
-> 位于 `gen/android` 之外的插件模块中，通过 `consumerProguardFiles` 生效 —— 见 §4.6。）
+> 位于 `gen/android` 之外的插件模块中，通过 `consumerProguardFiles` 生效 —— 见 §3。）
 >
 > **FileProvider 以前是这里的第五处，现在不是了。** 分享图片需要 `content://` URI，而
 > `androidx.core.content.FileProvider` 原先写在 `gen/android/app/src/main/AndroidManifest.xml` 里，
@@ -187,14 +74,9 @@ Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 r
 > 同一个 provider 声明两次会被 manifest merger 合并，而 `FILE_PROVIDER_PATHS` 的
 > `meta-data` 有两个不同取值时合并会**直接报错**，不是无害的重复。
 
-### 4.4 运行与打包
+---
 
-```bash
-npm run dev:android              # = tauri android dev
-npm run build:android:release    # = tauri android build  ->  已签名的 APK / AAB
-```
-
-### 4.5 前端怎么和 Kotlin 说话
+## 2. 前端怎么和 Kotlin 说话
 
 ```
 Vue  invoke("send_clipboard")
@@ -270,7 +152,9 @@ Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运
 Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 `ANDROID_PLUGIN_PACKAGE` / `ANDROID_PLUGIN_CLASS` 常量里。
 
-### 4.6 release 构建：R8 与插件的 keep 规则
+---
+
+## 3. release 构建：R8 与插件的 keep 规则
 
 release 是开了压缩混淆的（`app/build.gradle.kts` 里的 `optimization { enable = true }`），而插件唯一依赖的
 反射路径 R8 看不见：`Invoke.parseArgs(SetTextArgs::class.java)` 用 **Jackson** 反序列化命令参数，靠的是运行时
@@ -293,12 +177,15 @@ AGP 会把 library 的 consumer 规则合进每一个开启压缩的使用方，
 自带的 consumer 规则保住，清单里的组件（Activity / Service / Receiver）由 AGP 的 `aapt_rules.txt` 保住 ——
 参数类是唯一漏掉的一环。
 
-### 4.7 edge-to-edge、系统栏与 `env(safe-area-inset-*)`
+---
+
+## 4. edge-to-edge、系统栏与 `env(safe-area-inset-*)`
 
 `targetSdk = 37` 意味着系统强制 Activity 走 edge-to-edge，webview 会铺满整块屏幕，底部导航栏压在它上面。
 而 Android **不会**把这个 inset 交给 CSS：WebView 只按「显示挖孔」填充 `env(safe-area-inset-*)`，而且只在它占满
 整屏时才会填，所以没有刘海的手机上这些值全是 `0px`。这个留白只能做成布局内边距，位置就是
-**④ `MainActivity.kt`**（`onWebViewCreate` 用 `systemBars() | displayCutout()` 给 webview 的父容器加内边距）。
+**④ `MainActivity.kt`**（`onWebViewCreate` 用 `systemBars() | displayCutout()` 给 webview 的父容器加内边距）；
+它在哪里接线见 §1。
 
 动任何一侧之前，有两点值得先知道：
 
@@ -334,27 +221,7 @@ AGP 会把 library 的 consumer 规则合进每一个开启压缩的使用方，
 
 ---
 
-## 6. 故障排查
-
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | 先跑 `npm run build:desktop:ui` |
-| `Could not automatically determine the process-level CryptoProvider` | `rustls` 的 `default-features` 被打开了，同时启用了 ring 与 aws-lc-rs。见 §1 |
-| 设备互相发现不了 | 检查防火墙是否放行 UDP 5353（mDNS）与 TCP 47711；某些企业 Wi-Fi 禁用组播 |
-| 端口 47711 被占用 | 正常：会自动改用临时端口并通过 mDNS 广播真实端口 |
-| 配对后仍不同步 | 检查设置里的 `autoSync` / `syncText` / `syncImages`；确认设备列表里对方是「在线」 |
-| Android 后台不再同步 | 检查前台服务是否在运行（设置页有开关），以及通知权限是否授予 |
-| Android 点「广播剪贴板」跳到前台 | 预期行为，见 §4.5 |
-| `npm install` 后没有 vite | 见 §2 的 `.npmrc` 说明 |
-| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 §4.3 补回四处 |
-| **release** 构建在写剪贴板（或图片、通知）时报 ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` | R8 删掉了 `Invoke.parseArgs` 用反射反序列化的参数类。`apps/android/plugins/bridge/consumer-rules.pro` 负责保住它们；如果新加了带参数的 `@Command`，要把它一起加进去。见 §4.6 |
-| 内容被状态栏或导航栏盖住 | webview 没让开。在 Android 上 `env(safe-area-inset-*)` 解决不了（见 §4.7）—— 先确认 §4.3 的第 ④ 处还在 `MainActivity.kt` 里，再确认移动端布局没有把 `env()` 加回来 |
-| `Error: 注释中不允许出现字符串 "--"`（`mergeUniversalDebugResources`） | 某个 `res/values/*.xml` 的**注释里出现了两个连续的连字符**。XML 规范禁止这种写法，而 aapt2 只在资源合并阶段才报，报错位置还很靠后。本仓库踩过一次：`ic_launcher_background.xml` 的注释里写了 `npm run icons -- --bg ...`。`scripts/update-icons.mjs` 现在有断言拦住这个回归 |
-| `SigningConfig`/`compileSdk` 不一致 | 插件模块的 `compileSdk`/Java 版本必须与 `app/build.gradle.kts` 一致（当前 37 / Java 8） |
-
----
-
-## 7. 更换应用图标
+## 6. 更换应用图标
 
 源图在仓库根目录：`icon.png`（正方形；`tauri icon` 要求 ≥1024，当前 1254×1254）。
 
@@ -438,20 +305,3 @@ cargo clean -p clipmesh-desktop
 桌面端的可执行文件生成在仓库根的 `target/release/clipmesh-desktop.exe` —— 也就是工作区的
 target 目录，而不是 `apps/desktop/src-tauri/target/`。早先构建留下的 exe 里还是旧图标，
 所以要重新构建，别去双击那个陈旧的文件。
-
----
-
-## 8. 质量门
-
-提交前应当全部通过：
-
-```bash
-cargo test --workspace                        # Rust 单元测试
-cargo clippy --workspace --all-targets        # 建议
-npm run typecheck                             # 前端类型检查
-npm run build:ui                              # 构建两端前端
-```
-
-`cargo test --workspace` 会一并编译 `apps/android/src-tauri`，
-但**不会**执行 Gradle —— Android 的 Java/Kotlin 侧需要在真机或模拟器上验证，
-或用 `cd apps/android/src-tauri/gen/android && ./gradlew :bridge:assembleDebug`。

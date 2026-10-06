@@ -13,7 +13,7 @@ dist-ssr
 
 # Android build output. `gen/android` itself IS tracked: it is what
 # `tauri android init` produces and it carries the hand-written wiring described
-# in docs/BUILD.md §4.3.
+# in docs/MAINTENANCE.md §1.
 **/src-tauri/gen/android/.gradle
 **/src-tauri/gen/android/build
 **/src-tauri/gen/android/app/build
@@ -34,7 +34,7 @@ dist-ssr
 #
 # Nothing here should ever exist in the working tree: the release signing config
 # reads its four values from the *global* `~/.gradle/gradle.properties` or the
-# environment (docs/BUILD.md §4.1), and the device identity is generated into the
+# environment (README.md, Android → "Environment variables"), and the device identity is generated into the
 # per-user app config directory at first run. These patterns exist so that the
 # day someone drops a keystore into the repo by hand, git refuses it instead of
 # committing it.

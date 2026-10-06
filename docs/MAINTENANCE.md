@@ -1,134 +1,21 @@
-# Building and Releasing
+# Maintenance notes
 
-**English** | [简体中文](BUILD.zh-CN.md)
+**English** | [简体中文](MAINTENANCE.zh-CN.md)
 
-This document covers: desktop packaging, the Android build and native plugin wiring, and common troubleshooting.
+This document covers what a maintainer needs to know **before changing this code**: the `gen/android`
+wiring that `tauri android init` does not reproduce, the Rust ↔ Kotlin bridge, the R8 keep rules,
+edge-to-edge insets, where data is stored, and how to change the app icon.
 
----
-
-## 1. Requirements
-
-| Component | Version | Notes |
-| --- | --- | --- |
-| Rust | **1.85+** (edition 2024) | `rustup default stable` |
-| Node.js | **20+** | Frontend and npm workspaces |
-| JDK | **17+** | Android only |
-| Android SDK | compileSdk **37** | Android only |
-| Android NDK | **26+** | Android only |
-
-**`protoc` is not needed.** Protocol compilation goes through `protox` (a pure Rust implementation),
-so a freshly cloned machine can build with nothing but a Rust toolchain — the same holds for CI and cross-compilation hosts.
-
-The crypto backend is pinned to **ring**: `rustls` and `tokio-rustls` both have their default features
-explicitly disabled, so `aws-lc-rs` does not drag in a C toolchain / cmake / NASM. Do not turn their
-`default-features` back on in `Cargo.toml` — that enables both providers at once, and
-`ServerConfig::builder()` panics at runtime.
+Building and running it is in [`README.md`](../README.md).
 
 ---
 
-## 2. First-time install
-
-```bash
-npm install            # repo root, installs every workspace in one go
-cargo fetch            # optional: warm the crates cache
-```
-
-> **Note**: the repo root has an `.npmrc` whose contents are `include=dev`.
-> Some environments export `NODE_ENV=production`, which makes npm skip every devDependency by default,
-> so the install finishes but the build cannot run (no vite / vue-tsc / tauri CLI).
-> If you do not want that file, delete it and then use `npm install --include=dev`.
-
----
-
-## 3. Desktop
-
-### Development
-
-```bash
-npm run dev:desktop        # = tauri dev
-```
-
-Tauri will:
-1. Run `beforeDevCommand` in `apps/desktop/`: `npm --prefix ui run dev` (Vite, port 1420, `strictPort`)
-2. Compile `apps/desktop/src-tauri` (about 3–10 minutes the first time, incremental afterwards)
-3. Open a window pointed at `http://localhost:1420`
-
-### Frontend only (no Rust compile)
-
-```bash
-npm run dev:desktop:ui
-```
-
-Open <http://localhost:1420> in a browser. When `__TAURI_INTERNALS__` is not detected,
-`packages/ui-core/src/api/transport.ts` falls back to `api/mock.ts` automatically,
-serving three sample devices, history and fake events that change on their own. Good for UI work.
-
-### Packaging
-
-```bash
-npm run build:desktop:ui     # ui/dist has to be generated first
-npm run build:desktop        # = tauri build
-```
-
-The artifacts land in the workspace target directory at the repo root: `target/release/bundle/`.
-
-> `tauri.conf.json`'s `frontendDist` is `../ui/dist`,
-> i.e. `apps/desktop/ui/dist`. `tauri::generate_context!()` reads that directory at compile time,
-> so **`cargo build` fails when the directory does not exist**. That is why, before a Rust-only
-> `cargo check`, the frontend build has to run at least once. `dist/` is in `.gitignore`, so a fresh clone must build it itself.
-
-### Development logging
-
-```bash
-CLIPMESH_LOG=debug npm run dev:desktop        # Windows PowerShell: $env:CLIPMESH_LOG="debug"
-```
-
----
-
-## 4. Android
-
-### 4.1 Environment variables
-
-```powershell
-$env:JAVA_HOME      = "D:\Program Files\Java\jdk-17"      # or the jbr bundled with Android Studio
-$env:ANDROID_HOME   = "D:\Program Files\Android\Sdk"
-$env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
-```
-
-Tauri also reads `TAURI_ANDROID_PROJECT_PATH` (defaults to `src-tauri/gen/android`).
-
-**Release signing.** `app/build.gradle.kts` takes the signing material from four values read *outside* the repository — a Gradle property first, then the environment variable. Putting them in the **global** `~/.gradle/gradle.properties` keeps them out of this project entirely, and out of `git status`:
-
-```properties
-KEYSTORE_FILE=C:\\path\\to\\store.keystore
-KEYSTORE_PASSWORD=…
-KEY_ALIAS=…
-KEY_PASSWORD=…
-```
-
-| Variable | Meaning |
-| --- | --- |
-| `KEYSTORE_FILE` | path to the `.jks` / `.keystore` — absolute, or relative to `app/` |
-| `KEYSTORE_PASSWORD` | keystore password |
-| `KEY_ALIAS` | the key's alias inside the keystore |
-| `KEY_PASSWORD` | that key's password |
-
-**Only release builds need them.** Debug builds — `npm run dev:android`, `assembleDebug` — sign with the debug key and ignore all four. If any of them is missing for a release build, the build still configures and completes, but the APK/AAB comes out **unsigned and cannot be installed**; Gradle prints a warning naming the ones that are missing.
-
-> Android refuses to install an update whose signing key differs from the installed app's. Working around that means uninstalling first — and uninstalling deletes the app's private directory, which is where this device's identity lives. Every existing pairing is invalidated and has to be redone. Keep the release keystore, and back it up.
-
-### 4.2 Rust target
-
-```bash
-rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-```
-
-### 4.3 Native plugin wiring (important)
+## 1. Native plugin wiring (important)
 
 The Kotlin plugin lives in `apps/android/plugins/bridge/` as a **standalone Gradle library module**,
 outside `gen/android` — that way re-running `tauri android init` does not overwrite it.
 
-Beyond the README, `gen/android` needs **four** hand-maintained places, all **already committed to the repo**; they are recorded here to explain why:
+Beyond the README's build steps, `gen/android` needs **four** hand-maintained places, all **already committed to the repo**; they are recorded here to explain why:
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -163,7 +50,8 @@ Service / Receiver / Activity / FileProvider declarations into the app.
 
 **③ the same file — release signing**
 
-The `signingConfigs` block and the `signingConfig = …` line inside `buildTypes.release`, described in §4.1.
+The `signingConfigs` block and the `signingConfig = …` line inside `buildTypes.release`, described in
+[`README.md`](../README.md) (Android → *Environment variables*).
 Tauri's template ships neither, so a regenerated project produces unsigned release builds until they are put back.
 
 **④ `apps/android/src-tauri/gen/android/app/src/main/java/app/cm/clipmesh/MainActivity.kt`**
@@ -171,14 +59,14 @@ Tauri's template ships neither, so a regenerated project produces unsigned relea
 The activity keeps the web content out from under the system bars, which nothing in the generated project does:
 `enableEdgeToEdge()` makes the webview cover the whole display — and from `targetSdk = 35` the platform enforces
 that whether or not the call is there — so `onWebViewCreate` pads the webview's parent content frame by
-`systemBars() | displayCutout()`. See §4.7: the code is small, but it is the only thing standing between the
+`systemBars() | displayCutout()`. See §4: the code is small, but it is the only thing standing between the
 bottom tab bar and the navigation bar.
 
 > If `gen/android` is regenerated (delete it, then run `tauri android init`), **all four places above** have
 > to be added back. These are the only generated-file changes that need manual maintenance.
 > (`apps/android/plugins/bridge/consumer-rules.pro` is deliberately **not** on the list: it contains R8 keep
 > rules rather than wiring, lives in the plugin module outside `gen/android`, and reaches the app through
-> `consumerProguardFiles` — see §4.6.)
+> `consumerProguardFiles` — see §3.)
 >
 > **The FileProvider used to be a fifth item here. It no longer is.** Sharing an image needs a `content://`
 > URI, and `androidx.core.content.FileProvider` used to be declared in
@@ -190,14 +78,9 @@ bottom tab bar and the navigation bar.
 > declaring the same provider twice merges the two elements, and two different values for the
 > `FILE_PROVIDER_PATHS` meta-data make that merge **fail the build** rather than duplicate harmlessly.
 
-### 4.4 Running and packaging
+---
 
-```bash
-npm run dev:android              # = tauri android dev
-npm run build:android:release    # = tauri android build  ->  signed APK / AAB
-```
-
-### 4.5 How the frontend talks to Kotlin
+## 2. How the frontend talks to Kotlin
 
 ```
 Vue  invoke("send_clipboard")
@@ -275,7 +158,9 @@ Rust ↔ Kotlin method names correspond one-to-one, and **changing one side mean
 The Kotlin class name and package name are in the
 `ANDROID_PLUGIN_PACKAGE` / `ANDROID_PLUGIN_CLASS` constants in `apps/android/src-tauri/src/plugin.rs`.
 
-### 4.6 Release builds: R8 and the plugin's keep rules
+---
+
+## 3. Release builds: R8 and the plugin's keep rules
 
 Release is minified (`optimization { enable = true }` in `app/build.gradle.kts`), and R8 cannot see the one
 reflective path the plugin depends on: `Invoke.parseArgs(SetTextArgs::class.java)` deserialises a command's
@@ -299,14 +184,16 @@ app's own R8 configuration proves the mechanism (`build/outputs/mapping/*/config
 themselves are kept by `:tauri-android`'s own consumer rules, and manifest components (the activities, the
 service, the receivers) by AGP's `aapt_rules.txt` — the argument classes were the only gap.
 
-### 4.7 Edge-to-edge, the system bars, and `env(safe-area-inset-*)`
+---
+
+## 4. Edge-to-edge, the system bars, and `env(safe-area-inset-*)`
 
 `targetSdk = 37` means the platform forces the activity edge-to-edge, so the webview is laid out over the whole
 display and the bottom navigation bar overlays it. Android does **not** hand that inset to CSS: the WebView
 fills `env(safe-area-inset-*)` in only for the display *cutout*, and only while it occupies the entire screen, so
 on a phone without a notch every one of those values is `0px`. The inset therefore has to be a layout inset, and
 it is applied in **④ `MainActivity.kt`** (`onWebViewCreate` pads the webview's parent content frame by
-`systemBars() | displayCutout()`).
+`systemBars() | displayCutout()`); see §1 for where that file is wired in.
 
 Two consequences worth knowing before touching either side:
 
@@ -342,27 +229,7 @@ Two consequences worth knowing before touching either side:
 
 ---
 
-## 6. Troubleshooting
-
-| Symptom | Cause / what to do |
-| --- | --- |
-| ``The `frontendDist` configuration is set to `"../ui/dist"` but this path doesn't exist`` | Run `npm run build:desktop:ui` first |
-| `Could not automatically determine the process-level CryptoProvider` | `rustls`'s `default-features` was turned on, which enables ring and aws-lc-rs at the same time. See §1 |
-| Devices cannot discover each other | Check whether the firewall allows UDP 5353 (mDNS) and TCP 47711; some corporate Wi-Fi networks disable multicast |
-| Port 47711 is already in use | Normal: it falls back to an ephemeral port and advertises the real port over mDNS |
-| Still not syncing after pairing | Check `autoSync` / `syncText` / `syncImages` in the settings; make sure the other side shows as "online" in the device list |
-| Android no longer syncs in the background | Check whether the foreground service is running (there is a switch on the settings page) and whether notification permission has been granted |
-| Tapping "Broadcast clipboard" on Android jumps to the foreground | Expected behaviour, see §4.5 |
-| No vite after `npm install` | See the `.npmrc` note in §2 |
-| Gradle cannot find `:bridge` | `gen/android` was regenerated; add all four places back as described in §4.3 |
-| A **release** build fails with ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` when writing the clipboard (or the image, or showing the notification) | R8 stripped an argument class that `Invoke.parseArgs` deserialises by reflection. `apps/android/plugins/bridge/consumer-rules.pro` keeps them; if a new parameterised `@Command` was added, its argument class has to be added there too. See §4.6 |
-| Content sits under the status or navigation bar | The webview is not inset. `env(safe-area-inset-*)` cannot fix it on Android (see §4.7) — check that place ④ in §4.3 is still in `MainActivity.kt`, and that the mobile layout has not added `env()` back on top of it |
-| `Error: The string "--" is not allowed in comments` (`mergeUniversalDebugResources`) | Two consecutive hyphens appear **inside a comment** in one of the `res/values/*.xml` files. The XML spec forbids that, and aapt2 only reports it during resource merging, at a position far from the real one. This repo hit it once: a comment in `ic_launcher_background.xml` contained `npm run icons -- --bg ...`. `scripts/update-icons.mjs` now has an assertion that stops this regression |
-| `SigningConfig`/`compileSdk` mismatch | The plugin module's `compileSdk`/Java version must match `app/build.gradle.kts` (currently 37 / Java 8) |
-
----
-
-## 7. Changing the app icon
+## 6. Changing the app icon
 
 The source image is at the repo root: `icon.png` (square; `tauri icon` requires ≥1024, currently 1254×1254).
 
@@ -448,20 +315,3 @@ cargo clean -p clipmesh-desktop
 The desktop executable is built to `target/release/clipmesh-desktop.exe` under the repo root — the
 workspace target directory, not `apps/desktop/src-tauri/target/`. An exe left over from an earlier
 build still carries the old icon, so rebuild rather than double-clicking a stale one.
-
----
-
-## 8. Quality gate
-
-Everything here should pass before committing:
-
-```bash
-cargo test --workspace                        # Rust unit tests
-cargo clippy --workspace --all-targets        # recommended
-npm run typecheck                             # frontend type check
-npm run build:ui                              # build both frontends
-```
-
-`cargo test --workspace` also compiles `apps/android/src-tauri`,
-but it does **not** run Gradle — the Android Java/Kotlin side has to be verified on a real device or emulator,
-or with `cd apps/android/src-tauri/gen/android && ./gradlew :bridge:assembleDebug`.

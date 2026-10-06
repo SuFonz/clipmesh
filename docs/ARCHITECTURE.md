@@ -387,4 +387,4 @@ clipmesh/
 | Phase 5 | mDNS + TCP + TLS | `crates/network` |
 | Phase 6 | Desktop | `apps/desktop` |
 | Phase 7 | Android + Native Plugin | `apps/android` |
-| Phase 8 | Testing / optimisation / packaging | `docs/BUILD.md`, CI |
+| Phase 8 | Testing / optimisation / packaging | `README.md` (build and packaging), CI |

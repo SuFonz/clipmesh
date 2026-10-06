@@ -382,4 +382,4 @@ clipmesh/
 | Phase 5 | mDNS + TCP + TLS | `crates/network` |
 | Phase 6 | 桌面端 | `apps/desktop` |
 | Phase 7 | Android + Native Plugin | `apps/android` |
-| Phase 8 | 测试/优化/打包 | `docs/BUILD.zh-CN.md`、CI |
+| Phase 8 | 测试/优化/打包 | `README.md`（构建与打包）、CI |

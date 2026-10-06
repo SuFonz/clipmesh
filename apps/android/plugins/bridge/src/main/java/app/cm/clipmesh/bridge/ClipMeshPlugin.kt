@@ -58,7 +58,7 @@ private const val LEGACY_MEDIA_PERMISSION_ALIAS = "mediaExternalStorage"
  * so every `@Command` here has a matching typed method in
  * `apps/android/src-tauri/src/plugin.rs`. Changing a name on one side without
  * the other is a runtime failure, not a compile error - the names are therefore
- * listed in `docs/BUILD.md`.
+ * listed in `docs/MAINTENANCE.md` §2.
  *
  * Everything that touches `ClipboardManager` runs on the main looper, because
  * the platform requires it. Reading the process-wide broadcast handoff does not

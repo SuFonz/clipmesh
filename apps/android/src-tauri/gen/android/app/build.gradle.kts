@@ -159,7 +159,7 @@ rust {
 
 dependencies {
     // ClipMesh's clipboard, notification and foreground service plugin.
-    // Declared in settings.gradle; see docs/BUILD.md.
+    // Declared in settings.gradle; see docs/MAINTENANCE.md §1.
     implementation(project(":bridge"))
 
     implementation("androidx.webkit:webkit:1.14.0")

@@ -10,7 +10,7 @@
       written; they are not part of the string. This file is part of the
       generated project that the repo tracks, not one of the three files the
       build rewrites (`tauri.build.gradle.kts`, `tauri.properties`,
-      `tauri.settings.gradle`), so the edit sticks. See docs/BUILD.md §4.
+      `tauri.settings.gradle`), so the edit sticks. See docs/MAINTENANCE.md §1.
     -->
     <string name="app_name">"ClipMesh"</string>
     <string name="main_activity_title">"ClipMesh"</string>

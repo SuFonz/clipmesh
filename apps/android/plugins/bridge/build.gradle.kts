@@ -7,7 +7,7 @@
 // It is wired into the generated project by two lines:
 //   gen/android/settings.gradle      -> include ':bridge'
 //   gen/android/app/build.gradle.kts -> implementation(project(":bridge"))
-// See docs/BUILD.md.
+// See docs/MAINTENANCE.md §1.
 
 plugins {
     id("com.android.library")
@@ -25,7 +25,7 @@ android {
         // What a *consumer's* R8 must not strip out of this module: the argument
         // classes `Invoke.parseArgs` deserialises by reflection, which the app's
         // release build otherwise renames and guts - see consumer-rules.pro and
-        // docs/BUILD.md. Declared here rather than in the app module's
+        // docs/MAINTENANCE.md §3. Declared here rather than in the app module's
         // `gen/android/app/proguard-rules.pro` because the rules describe this
         // module's classes, they travel with it, and `tauri android init` may
         // rewrite that generated file at any time.

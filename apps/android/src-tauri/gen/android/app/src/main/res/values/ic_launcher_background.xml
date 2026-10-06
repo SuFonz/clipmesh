@@ -6,8 +6,8 @@
   #FFFFFF, which shows as a white halo around a coloured icon wherever the
   launcher masks it; the value below is sampled from the source artwork.
 
-  Regenerating with a different colour is documented in docs/BUILD.md,
-  section 7. The command is not repeated here because XML forbids two
+  Regenerating with a different colour is documented in docs/MAINTENANCE.md,
+  section 6. The command is not repeated here because XML forbids two
   consecutive hyphens inside a comment.
 -->
 <resources>
