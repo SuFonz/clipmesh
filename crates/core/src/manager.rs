@@ -600,7 +600,7 @@ impl SyncManager {
     ///
     /// # Errors
     /// Returns [`CoreError::InvalidState`] when there is no such request, or a
-    /// network error when the answer cannot be delivered.
+    /// [`CoreError`] when an accepted pairing cannot be recorded.
     pub async fn respond_pairing(self: &Arc<Self>, device_id: DeviceId, accept: bool) -> Result<()> {
         let prompt = self
             .registry
@@ -610,15 +610,69 @@ impl SyncManager {
             .find(|prompt| prompt.device_id == device_id)
             .ok_or(CoreError::InvalidState("no pairing request for that device"))?;
 
+        if accept {
+            // The name the user saw in the prompt wins here: it describes the
+            // request that was actually answered. It is normally the same name
+            // the request carried, because the prompt is built from it.
+            self.accept_incoming_pairing(device_id, prompt.name.clone())
+                .await?;
+        } else {
+            let nonce = self
+                .incoming_nonces
+                .lock()
+                .remove(&device_id)
+                .unwrap_or_default();
+
+            let reply = build_pair_accept(&self.identity, &nonce, false)?;
+            if let Err(error) = self
+                .network
+                .send(device_id, Envelope::new(Payload::PairAccept(reply)))
+                .await
+            {
+                tracing::warn!(%device_id, %error, "could not deliver the pairing answer");
+            }
+        }
+
+        self.registry.lock().resolve_prompt(device_id);
+        self.emit_pairing_requests();
+        self.emit_peers();
+        self.emit_status();
+        Ok(())
+    }
+
+    /// Accept an incoming pairing request: pin the peer and send the proof.
+    ///
+    /// This is the shared "yes" behind both the user pressing accept in
+    /// [`SyncManager::respond_pairing`] and the automatic answer to a request
+    /// from a device that is already trusted.
+    ///
+    /// It deliberately does not consult the prompt registry. The automatic path
+    /// runs *instead of* raising a prompt, so demanding one would force that path
+    /// to raise a prompt it then has to resolve - a dialog flickering into the UI
+    /// and racing the answer, which is the defect this sharing exists to avoid.
+    ///
+    /// A failed `send` is logged rather than returned: the peer is pinned here
+    /// either way, and a device that did not receive the proof re-asks or
+    /// reconnects on its own. Leaving the local trust store out of step with the
+    /// peer would be the worse outcome.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::NotConnected`] when the session is gone by the time
+    /// the answer is recorded, or a trust store error when the pin cannot be
+    /// persisted.
+    async fn accept_incoming_pairing(&self, device_id: DeviceId, name: String) -> Result<()> {
+        // Read out before the send, so no lock guard is held across the await and
+        // the record is still built from the identity this connection proved,
+        // even if the peer disconnects while the answer is in flight.
+        let session = self.sessions.lock().get(&device_id).cloned();
+
         let nonce = self
             .incoming_nonces
             .lock()
             .remove(&device_id)
             .unwrap_or_default();
 
-        let session = self.sessions.lock().get(&device_id).cloned();
-
-        let reply = build_pair_accept(&self.identity, &nonce, accept)?;
+        let reply = build_pair_accept(&self.identity, &nonce, true)?;
         if let Err(error) = self
             .network
             .send(device_id, Envelope::new(Payload::PairAccept(reply)))
@@ -627,24 +681,17 @@ impl SyncManager {
             tracing::warn!(%device_id, %error, "could not deliver the pairing answer");
         }
 
-        self.registry.lock().resolve_prompt(device_id);
+        let session = session.ok_or(CoreError::NotConnected(device_id))?;
+        let device = TrustedDevice::new(
+            name.clone(),
+            session.platform,
+            session.certificate.clone(),
+            &session.public_key,
+        )?;
+        self.trust.write().trust(device)?;
 
-        if accept {
-            let session = session.ok_or(CoreError::NotConnected(device_id))?;
-            let device = TrustedDevice::new(
-                prompt.name.clone(),
-                session.platform,
-                session.certificate.clone(),
-                &session.public_key,
-            )?;
-            self.trust.write().trust(device)?;
-            tracing::info!(%device_id, name = %prompt.name, "paired a new device");
-            self.emit_trusted();
-        }
-
-        self.emit_pairing_requests();
-        self.emit_peers();
-        self.emit_status();
+        tracing::info!(%device_id, name = %name, "pairing accepted; the device is now trusted");
+        self.emit_trusted();
         Ok(())
     }
 
@@ -1005,7 +1052,9 @@ impl SyncManager {
         }
 
         match envelope.payload {
-            Some(Payload::PairRequest(request)) => self.handle_pair_request(device_id, request),
+            Some(Payload::PairRequest(request)) => {
+                self.handle_pair_request(device_id, request).await
+            }
             Some(Payload::PairAccept(accept)) => self.handle_pair_accept(device_id, accept).await,
             Some(Payload::ClipboardText(text)) => {
                 let payload = TextPayload::from_proto(&text)?;
@@ -1060,7 +1109,11 @@ impl SyncManager {
         }
     }
 
-    fn handle_pair_request(&self, device_id: DeviceId, request: clipmesh_protocol::PairRequest) -> Result<()> {
+    async fn handle_pair_request(
+        &self,
+        device_id: DeviceId,
+        request: clipmesh_protocol::PairRequest,
+    ) -> Result<()> {
         let session = self.sessions.lock().get(&device_id).cloned();
         let Some(session) = session else {
             return Err(CoreError::NotConnected(device_id));
@@ -1068,7 +1121,10 @@ impl SyncManager {
 
         // The request must describe the same device the TLS handshake proved.
         // Without this an attacker could ask us to pin *somebody else's*
-        // certificate and then impersonate that device.
+        // certificate and then impersonate that device. These checks run before
+        // the trusted-device shortcut below, which is what makes that shortcut
+        // safe: what it answers to is a request that this very connection
+        // proved came from the device we pinned.
         if request.fingerprint != session.fingerprint.to_hex() {
             return Err(CoreError::Other(format!(
                 "device {device_id} asked to pair with a fingerprint that is not the one its \
@@ -1091,13 +1147,46 @@ impl SyncManager {
             .lock()
             .insert(device_id, request.nonce.clone());
 
+        // A device with no name of its own is shown under the name it connected
+        // with; both the prompt and the automatic answer use this one name.
+        let name = if request.name.trim().is_empty() {
+            session.name.clone()
+        } else {
+            request.name.clone()
+        };
+
+        // A device we already trust has nothing new for the user to decide. The
+        // trust store pins the peer's certificate fingerprint, and the handshake
+        // has already proved the peer holds the matching private key, so this
+        // request can only be the device we paired with - it is asking again
+        // because *it* dropped *us*, not the other way round.
+        //
+        // Ask the user anyway and the request is unanswerable: `pairing_requests`
+        // hides prompts for trusted devices, so no buttons appear and the
+        // exchange sits there until it times out. Answer straight away instead of
+        // raising and resolving a prompt, because a prompt that flickers into the
+        // UI races the automatic answer.
+        if self.is_trusted(device_id) {
+            tracing::info!(
+                %device_id,
+                name = %name,
+                "pairing request from a device we already trust; accepting automatically"
+            );
+            self.accept_incoming_pairing(device_id, name).await?;
+
+            // Only ever clears: a prompt for a trusted device can only be a
+            // leftover from before it was trusted, and it would keep the peer
+            // flagged as waiting for an answer.
+            self.registry.lock().resolve_prompt(device_id);
+            self.emit_pairing_requests();
+            self.emit_peers();
+            self.emit_status();
+            return Ok(());
+        }
+
         let prompt = PairingPrompt {
             device_id,
-            name: if request.name.trim().is_empty() {
-                session.name.clone()
-            } else {
-                request.name.clone()
-            },
+            name,
             platform: session.platform,
             fingerprint: session.fingerprint.to_grouped(),
             address: session.address.to_string(),
@@ -1176,6 +1265,12 @@ impl SyncManager {
 
         tracing::info!(%device_id, "pairing accepted; the device is now trusted");
         self.emit_trusted();
+        // `emit_peers` above ran *before* the trust write, so the snapshot it
+        // sent still said `trusted: false`. `PeerView::trusted` is computed from
+        // the trust store at call time, so without a second emit the UI keeps
+        // showing the device under "discovered" until something unrelated
+        // happens to refresh the list.
+        self.emit_peers();
         self.emit_status();
         Ok(())
     }
@@ -1564,7 +1659,7 @@ mod tests {
     use super::*;
 
     use async_trait::async_trait;
-    use clipmesh_protocol::{ImageMeta, ImagePayload, TextPayload};
+    use clipmesh_protocol::{DeviceInfo, ImageMeta, ImagePayload, TextPayload};
     use futures::stream::{self, BoxStream};
 
     /// A clipboard that holds whatever was last written to it.
@@ -1589,8 +1684,28 @@ mod tests {
         }
     }
 
-    /// A network that goes nowhere.
-    struct FakeNetwork;
+    /// A network that goes nowhere but remembers what it was asked to send.
+    #[derive(Default)]
+    struct FakeNetwork {
+        sent: Mutex<Vec<(DeviceId, Envelope)>>,
+    }
+
+    impl FakeNetwork {
+        /// What the engine put on the wire, in order.
+        fn sent(&self) -> Vec<(DeviceId, Envelope)> {
+            self.sent.lock().clone()
+        }
+
+        /// Just the kinds, for the many cases that only care which answer went
+        /// out - if any did.
+        fn sent_kinds(&self) -> Vec<MessageKind> {
+            self.sent
+                .lock()
+                .iter()
+                .filter_map(|(_, envelope)| envelope.kind())
+                .collect()
+        }
+    }
 
     #[async_trait]
     impl NetworkProvider for FakeNetwork {
@@ -1602,7 +1717,8 @@ mod tests {
             Ok(())
         }
 
-        async fn send(&self, _device: DeviceId, _envelope: Envelope) -> Result<()> {
+        async fn send(&self, device: DeviceId, envelope: Envelope) -> Result<()> {
+            self.sent.lock().push((device, envelope));
             Ok(())
         }
 
@@ -1678,11 +1794,21 @@ mod tests {
         images: Option<Arc<dyn ImageStore>>,
         capacity: usize,
     ) -> Arc<SyncManager> {
+        build_engine_with_network(Arc::new(FakeNetwork::default()), history_path, images, capacity)
+    }
+
+    /// The same, for a test that also wants to look at what the engine sent.
+    fn build_engine_with_network(
+        network: Arc<FakeNetwork>,
+        history_path: Option<PathBuf>,
+        images: Option<Arc<dyn ImageStore>>,
+        capacity: usize,
+    ) -> Arc<SyncManager> {
         SyncManager::new(SyncManagerOptions {
             identity: Arc::new(DeviceIdentity::generate("Test device").unwrap()),
             trust: Arc::new(RwLock::new(TrustStore::in_memory())),
             clipboard: Arc::new(FakeClipboard::default()),
-            network: Arc::new(FakeNetwork),
+            network,
             settings: Settings {
                 history_capacity: capacity,
                 ..Settings::default()
@@ -1691,6 +1817,64 @@ mod tests {
             history_path,
             images,
         })
+    }
+
+    /// A peer identity, and the session a finished handshake with it leaves.
+    fn peer_session(name: &str) -> (Arc<DeviceIdentity>, PeerSession) {
+        let identity = Arc::new(DeviceIdentity::generate(name).unwrap());
+        let session = PeerSession {
+            device_id: identity.device_id(),
+            name: identity.name(),
+            platform: Platform::current(),
+            address: "10.0.0.5:47711".parse().unwrap(),
+            trusted: false,
+            since_millis: now_millis(),
+            public_key: identity.public_key(),
+            fingerprint: *identity.fingerprint(),
+            certificate: identity.certificate().clone(),
+        };
+        (identity, session)
+    }
+
+    /// Record the session the network layer would have handed the engine.
+    fn connect(engine: &SyncManager, session: &PeerSession) {
+        engine.sessions.lock().insert(session.device_id, session.clone());
+        engine.registry.lock().set_connected(session.device_id, true);
+    }
+
+    /// Record the discovery announcement that makes a peer visible in the list.
+    ///
+    /// Order matters against [`connect`]: an observed peer starts out
+    /// disconnected, and only the session marks it connected.
+    fn discover(engine: &SyncManager, session: &PeerSession) {
+        engine.registry.lock().observe(&PeerAddress {
+            device_id: session.device_id,
+            device: DeviceInfo::local(session.device_id, &session.name),
+            fingerprint: session.fingerprint.to_hex(),
+            address: session.address,
+        });
+    }
+
+    /// The trust store entry pairing this peer produces.
+    fn trust_record(identity: &DeviceIdentity, name: &str) -> TrustedDevice {
+        TrustedDevice::new(
+            name,
+            Platform::current(),
+            identity.certificate().clone(),
+            &identity.public_key(),
+        )
+        .unwrap()
+    }
+
+    /// The request a peer sends when it wants to be trusted.
+    fn pair_request(identity: &DeviceIdentity, nonce: &[u8]) -> clipmesh_protocol::PairRequest {
+        clipmesh_protocol::PairRequest::new(
+            &identity.info(),
+            identity.public_key().to_vec(),
+            identity.certificate().to_der(),
+            identity.fingerprint().to_hex(),
+            nonce.to_vec(),
+        )
     }
 
     fn text_content(content: &str) -> ClipboardContent {
@@ -1747,6 +1931,235 @@ mod tests {
             assert!(!may_handle_from_untrusted(kind, false), "{kind:?}");
             assert!(!may_handle_from_untrusted(kind, true), "{kind:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_request_from_a_trusted_device_is_accepted_without_a_prompt() {
+        // The re-pairing flow: the other device dropped us, so it asks again
+        // while we still trust it. There is nothing for the user to decide, and
+        // a prompt for a trusted device is filtered out of `pairing_requests`,
+        // so asking used to leave the request hanging with no buttons.
+        let network = Arc::new(FakeNetwork::default());
+        let engine = build_engine_with_network(Arc::clone(&network), None, None, 50);
+        let (peer, session) = peer_session("Phone");
+        connect(&engine, &session);
+        engine
+            .trust
+            .write()
+            .trust(trust_record(&peer, "Phone"))
+            .unwrap();
+
+        let request = pair_request(&peer, b"request nonce");
+        engine
+            .handle_message(
+                session.device_id,
+                Envelope::new(Payload::PairRequest(request)),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !engine.registry.lock().has_prompt(session.device_id),
+            "a trusted device must be answered without a prompt ever being raised"
+        );
+        assert!(engine.pairing_requests().is_empty());
+        assert_eq!(network.sent_kinds(), vec![MessageKind::PairAccept]);
+
+        // What went out is the proof the other side needs, checked the way the
+        // other side checks it: signed by this device over the nonce *it* chose,
+        // and carrying this device's certificate.
+        let sent = network.sent();
+        let Some(Payload::PairAccept(accept)) = sent[0].1.payload() else {
+            panic!("the answer to a pairing request must be a PairAccept");
+        };
+        assert!(accept.accepted, "the answer must be an acceptance");
+        verify_pair_accept(accept, b"request nonce", engine.identity().device_id())
+            .expect("the peer must be able to verify the automatic answer");
+        assert_eq!(accept.public_key, engine.identity().public_key().to_vec());
+
+        assert!(
+            !engine.incoming_nonces.lock().contains_key(&session.device_id),
+            "the answer consumed the nonce"
+        );
+        assert_eq!(
+            engine
+                .trust
+                .read()
+                .get(session.device_id)
+                .map(|device| device.fingerprint),
+            Some(*peer.fingerprint()),
+            "the device is pinned to the certificate the handshake proved"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_from_an_untrusted_device_still_asks_the_user() {
+        let network = Arc::new(FakeNetwork::default());
+        let engine = build_engine_with_network(Arc::clone(&network), None, None, 50);
+        let (peer, session) = peer_session("Phone");
+        connect(&engine, &session);
+
+        let request = pair_request(&peer, b"request nonce");
+        engine
+            .handle_message(
+                session.device_id,
+                Envelope::new(Payload::PairRequest(request)),
+            )
+            .await
+            .unwrap();
+
+        let prompts = engine.pairing_requests();
+        assert_eq!(prompts.len(), 1, "a stranger is the user's decision");
+        assert_eq!(prompts[0].device_id, session.device_id);
+        assert_eq!(prompts[0].name, "Phone");
+        assert_eq!(prompts[0].direction, PairingDirection::Incoming);
+        assert!(
+            !engine.is_trusted(session.device_id),
+            "nothing is trusted before the user says so"
+        );
+        assert!(
+            network.sent_kinds().is_empty(),
+            "no answer goes out before the user decides"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_accepted_pairing_is_announced_as_trusted_in_the_peers_snapshot() {
+        // This is the device that *started* the pairing, so the answer comes
+        // back as a `PairAccept`. `PeerView::trusted` is read from the trust
+        // store when the snapshot is built, so an emit that runs before the
+        // peer is written down says `trusted: false` - and a single early emit
+        // left the freshly paired device under "discovered" until something
+        // unrelated happened to refresh the list.
+        let network = Arc::new(FakeNetwork::default());
+        let engine = build_engine_with_network(Arc::clone(&network), None, None, 50);
+        let (peer, session) = peer_session("Phone");
+        discover(&engine, &session);
+        connect(&engine, &session);
+
+        engine.request_pairing(session.device_id).await.unwrap();
+        let nonce = engine
+            .outgoing
+            .lock()
+            .get(&session.device_id)
+            .expect("asking to pair leaves a request of ours outstanding")
+            .nonce
+            .clone();
+
+        // Only what processing the answer emits can be the snapshot under test,
+        // so nothing from asking to pair can be mistaken for it.
+        let mut events = engine.subscribe();
+        while events.try_recv().is_ok() {}
+
+        let accept = build_pair_accept(&peer, &nonce, true).unwrap();
+        engine
+            .handle_message(session.device_id, Envelope::new(Payload::PairAccept(accept)))
+            .await
+            .unwrap();
+
+        let mut emitted: Vec<CoreEvent> = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            emitted.push(event);
+        }
+
+        let last_peers = emitted
+            .iter()
+            .rposition(|event| matches!(event, CoreEvent::Peers(_)))
+            .expect("a device list that changed has to be sent to the UI");
+        let CoreEvent::Peers(snapshot) = &emitted[last_peers] else {
+            unreachable!("rposition found a peers event");
+        };
+
+        let view = snapshot
+            .iter()
+            .find(|view| view.device_id == session.device_id)
+            .expect("the device we just paired with must be in the list");
+        assert!(
+            view.trusted,
+            "the last snapshot sent to the UI must report the accepted device as trusted, \
+             otherwise it stays under \"discovered\" after a successful pairing"
+        );
+        assert!(
+            emitted[..last_peers]
+                .iter()
+                .any(|event| matches!(event, CoreEvent::Trusted(_))),
+            "that snapshot has to be the one taken after the trust store was written, \
+             not the earlier one taken while the answer was still being processed"
+        );
+    }
+
+    /// A request that disagrees with the identity the connection proved has to
+    /// be refused, and refused *before* the already-trusted shortcut: without
+    /// these checks an attacker could ask us to pin somebody else's certificate.
+    async fn assert_mismatched_request_is_refused(
+        tamper: impl FnOnce(&mut clipmesh_protocol::PairRequest),
+    ) {
+        let network = Arc::new(FakeNetwork::default());
+        let engine = build_engine_with_network(Arc::clone(&network), None, None, 50);
+        let (peer, session) = peer_session("Phone");
+        connect(&engine, &session);
+        engine
+            .trust
+            .write()
+            .trust(trust_record(&peer, "Phone"))
+            .unwrap();
+
+        let mut request = pair_request(&peer, b"request nonce");
+        tamper(&mut request);
+
+        let error = engine
+            .handle_message(
+                session.device_id,
+                Envelope::new(Payload::PairRequest(request)),
+            )
+            .await
+            .expect_err("a request that disagrees with the session must be refused");
+
+        assert!(
+            !engine.registry.lock().has_prompt(session.device_id),
+            "a forged request raises nothing: {error}"
+        );
+        assert!(
+            network.sent_kinds().is_empty(),
+            "a forged request is never answered"
+        );
+        assert!(
+            !engine.incoming_nonces.lock().contains_key(&session.device_id),
+            "the nonce of a forged request is not kept"
+        );
+        assert_eq!(
+            engine
+                .trust
+                .read()
+                .get(session.device_id)
+                .map(|device| device.fingerprint),
+            Some(*peer.fingerprint()),
+            "the pinned certificate is still the one the handshake proved"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_trusted_device_cannot_pair_with_a_fingerprint_we_did_not_see() {
+        assert_mismatched_request_is_refused(|request| {
+            request.fingerprint = "0000 0000".to_owned();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_trusted_device_cannot_pair_with_a_key_we_did_not_see() {
+        assert_mismatched_request_is_refused(|request| {
+            request.public_key = vec![0xAB; 32];
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_trusted_device_cannot_pair_under_someone_elses_id() {
+        assert_mismatched_request_is_refused(|request| {
+            request.device_id = DeviceId::new().to_string();
+        })
+        .await;
     }
 
     #[test]
