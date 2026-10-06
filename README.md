@@ -158,4 +158,4 @@ Android 的后台剪贴板限制是系统级约束：**没有**合法办法让�
 
 ## 许可证
 
-MIT OR Apache-2.0
+MIT，全文见 [`LICENSE`](LICENSE)。

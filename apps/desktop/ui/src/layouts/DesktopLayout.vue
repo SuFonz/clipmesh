@@ -33,6 +33,7 @@ const navItems: NavItem[] = [
   { to: "/devices", label: "设备", icon: "devices", hint: "配对请求 / 发现 / 信任的设备" },
   { to: "/history", label: "历史", icon: "history", hint: "最近的剪贴板内容" },
   { to: "/settings", label: "设置", icon: "settings", hint: "同步与身份" },
+  { to: "/about", label: "关于", icon: "info", hint: "版本与运行信息" },
 ];
 
 const route = useRoute();

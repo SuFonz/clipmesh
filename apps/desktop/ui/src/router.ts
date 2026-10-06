@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 
+import AboutView from "./views/AboutView.vue";
 import DevicesView from "./views/DevicesView.vue";
 import HistoryView from "./views/HistoryView.vue";
 import HomeView from "./views/HomeView.vue";
@@ -14,6 +15,7 @@ export const routes: RouteRecordRaw[] = [
   { path: "/devices", name: "devices", component: DevicesView, meta: { title: "设备" } },
   { path: "/history", name: "history", component: HistoryView, meta: { title: "历史" } },
   { path: "/settings", name: "settings", component: SettingsView, meta: { title: "设置" } },
+  { path: "/about", name: "about", component: AboutView, meta: { title: "关于" } },
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 

@@ -47,6 +47,7 @@ export { MAX_IMAGE_BYTES_OPTIONS, useSettingsStore } from "./stores/settings";
 export { useIdentityStore } from "./stores/identity";
 
 /* --- composables --- */
+export { useAppVersion } from "./composables/useAppVersion";
 export { useCoreEvents, type CoreEventsHandle } from "./composables/useCoreEvents";
 export { MOBILE_BREAKPOINT, useDeviceType, type DeviceType, type DeviceTypeInfo } from "./composables/useDeviceType";
 export { useRelativeTime, type RelativeTime } from "./composables/useRelativeTime";

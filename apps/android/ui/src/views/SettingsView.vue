@@ -10,6 +10,7 @@ import {
   formatMaxImageBytes,
   isMock,
   toMessage,
+  useAppVersion,
   useSettingsStore,
   useStatusStore,
   useToast,
@@ -39,6 +40,9 @@ const serviceBusy = ref(false);
 const serviceOn = ref(false);
 
 const mock = isMock();
+
+/** 版本号来自 Tauri 包信息（与桌面「关于」页同一个来源），这里不再写死。 */
+const version = useAppVersion();
 
 /**
  * 读一次真实状态（通知权限 + 前台服务）。
@@ -184,7 +188,7 @@ async function toggleService(value: boolean): Promise<void> {
 
     <AppCard title="关于" icon="info">
       <div class="about">
-        <span>ClipMesh 0.1.0</span>
+        <span>ClipMesh {{ version ?? "—" }}</span>
         <StatusPill
           :label="mock ? '浏览器 MOCK' : 'Tauri 运行时'"
           :tone="mock ? 'warn' : 'ok'"
@@ -194,6 +198,9 @@ async function toggleService(value: boolean): Promise<void> {
       <p class="cm-help mt-sm">
         无中心服务器，设备之间直接通过 TLS 通信。当前监听端口
         {{ statusStore.listenPort }}。
+      </p>
+      <p class="cm-help mt-sm">
+        以 MIT 许可证发布，全文见仓库根目录的 <span class="cm-mono">LICENSE</span>。
       </p>
     </AppCard>
   </div>

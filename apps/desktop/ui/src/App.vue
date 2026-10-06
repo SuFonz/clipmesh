@@ -3,15 +3,18 @@ import { RouterView } from "vue-router";
 
 import { ToastHost, useCoreEvents } from "@clipmesh/ui-core";
 
+import { useContextMenuGuard } from "./composables/useContextMenuGuard";
 import DesktopLayout from "./layouts/DesktopLayout.vue";
 
 /**
  * 桌面端根组件。
  *
- * 只做两件事：挂一次 `useCoreEvents()`（初始填充 + 订阅全部 `clipmesh://` 事件），
+ * 做三件事：挂一次 `useCoreEvents()`（初始填充 + 订阅全部 `clipmesh://` 事件）、
+ * 挂一次 `useContextMenuGuard()`（屏蔽 WebView2 的默认右键菜单），
  * 以及把当前路由塞进 DesktopLayout 的默认插槽。
  */
 useCoreEvents();
+useContextMenuGuard();
 </script>
 
 <template>
