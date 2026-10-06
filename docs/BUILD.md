@@ -97,6 +97,26 @@ $env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 
 Tauri also reads `TAURI_ANDROID_PROJECT_PATH` (defaults to `src-tauri/gen/android`).
 
+**Release signing.** `app/build.gradle.kts` takes the signing material from four values read *outside* the repository — a Gradle property first, then the environment variable. Putting them in the **global** `~/.gradle/gradle.properties` keeps them out of this project entirely, and out of `git status`:
+
+```properties
+KEYSTORE_FILE=C:\\path\\to\\store.keystore
+KEYSTORE_PASSWORD=…
+KEY_ALIAS=…
+KEY_PASSWORD=…
+```
+
+| Variable | Meaning |
+| --- | --- |
+| `KEYSTORE_FILE` | path to the `.jks` / `.keystore` — absolute, or relative to `app/` |
+| `KEYSTORE_PASSWORD` | keystore password |
+| `KEY_ALIAS` | the key's alias inside the keystore |
+| `KEY_PASSWORD` | that key's password |
+
+**Only release builds need them.** Debug builds — `npm run dev:android`, `assembleDebug` — sign with the debug key and ignore all four. If any of them is missing for a release build, the build still configures and completes, but the APK/AAB comes out **unsigned and cannot be installed**; Gradle prints a warning naming the ones that are missing.
+
+> Android refuses to install an update whose signing key differs from the installed app's. Working around that means uninstalling first — and uninstalling deletes the app's private directory, which is where this device's identity lives. Every existing pairing is invalidated and has to be redone. Keep the release keystore, and back it up.
+
 ### 4.2 Rust target
 
 ```bash
@@ -108,7 +128,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 The Kotlin plugin lives in `apps/android/plugins/bridge/` as a **standalone Gradle library module**,
 outside `gen/android` — that way re-running `tauri android init` does not overwrite it.
 
-Beyond the README, there are only two wiring points, both **already committed to the repo**; they are recorded here to explain why:
+Beyond the README, there are only three wiring points, all **already committed to the repo**; they are recorded here to explain why:
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -139,8 +159,13 @@ The plugin's `AndroidManifest.xml` uses the manifest merger to merge its permiss
 (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`,
 `RECEIVE_BOOT_COMPLETED`, `CHANGE_WIFI_MULTICAST_STATE`) and its Service / Receiver declarations into the app.
 
-> If `gen/android` is regenerated (delete it, then run `tauri android init`),
-> both places above have to be added back. This is the only generated-file change that needs manual maintenance.
+**③ the same file — release signing**
+
+The `signingConfigs` block and the `signingConfig = …` line inside `buildTypes.release`, described in §4.1.
+Tauri's template ships neither, so a regenerated project produces unsigned release builds until they are put back.
+
+> If `gen/android` is regenerated (delete it, then run `tauri android init`), **all three places above** have
+> to be added back. These are the only generated-file changes that need manual maintenance.
 
 ### 4.4 Running and packaging
 
@@ -246,7 +271,7 @@ The Kotlin class name and package name are in the
 | Android no longer syncs in the background | Check whether the foreground service is running (there is a switch on the settings page) and whether notification permission has been granted |
 | Tapping "Broadcast clipboard" on Android jumps to the foreground | Expected behaviour, see §4.5 |
 | No vite after `npm install` | See the `.npmrc` note in §2 |
-| Gradle cannot find `:bridge` | `gen/android` was regenerated; add both wiring points back as described in §4.3 |
+| Gradle cannot find `:bridge` | `gen/android` was regenerated; add all three wiring points back as described in §4.3 |
 | `Error: The string "--" is not allowed in comments` (`mergeUniversalDebugResources`) | Two consecutive hyphens appear **inside a comment** in one of the `res/values/*.xml` files. The XML spec forbids that, and aapt2 only reports it during resource merging, at a position far from the real one. This repo hit it once: a comment in `ic_launcher_background.xml` contained `npm run icons -- --bg ...`. `scripts/update-icons.mjs` now has an assertion that stops this regression |
 | `SigningConfig`/`compileSdk` mismatch | The plugin module's `compileSdk`/Java version must match `app/build.gradle.kts` (currently 37 / Java 8) |
 

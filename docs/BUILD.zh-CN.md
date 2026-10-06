@@ -97,6 +97,26 @@ $env:NDK_HOME       = "$env:ANDROID_HOME\ndk\29.0.13846066"
 
 Tauri 还会读 `TAURI_ANDROID_PROJECT_PATH`（默认 `src-tauri/gen/android`）。
 
+**release 签名。** `app/build.gradle.kts` 从**仓库之外**的四个值取签名材料 —— 先查 Gradle 属性，再查环境变量。放进**全局**的 `~/.gradle/gradle.properties` 就不会进这个项目，也不会出现在 `git status` 里：
+
+```properties
+KEYSTORE_FILE=C:\\path\\to\\store.keystore
+KEYSTORE_PASSWORD=…
+KEY_ALIAS=…
+KEY_PASSWORD=…
+```
+
+| 变量 | 含义 |
+| --- | --- |
+| `KEYSTORE_FILE` | `.jks` / `.keystore` 的路径 —— 绝对路径，或相对 `app/` 的路径 |
+| `KEYSTORE_PASSWORD` | 密钥库口令 |
+| `KEY_ALIAS` | 库中密钥的别名 |
+| `KEY_PASSWORD` | 该密钥的口令 |
+
+**只有 release 需要它们。** debug 构建 —— `npm run dev:android`、`assembleDebug` —— 用 debug 密钥签名，四个值一个都不看。release 构建缺任何一个都能配置成功、也能跑完，但产物是**未签名的 APK/AAB，装不上**；Gradle 会打印警告，列出缺的是哪几个。
+
+> 签名密钥与已安装应用不一致时，Android 会拒绝安装这次更新。绕过它就得先卸载 —— 而卸载会删掉应用的私有目录，这台设备的身份就在那里。**所有已配对的关系都会失效，必须重新配对。** 请保管好 release 密钥库并做好备份。
+
 ### 4.2 Rust target
 
 ```bash
@@ -108,7 +128,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 Kotlin 插件在 `apps/android/plugins/bridge/`，是**独立的 Gradle library 模块**，
 不在 `gen/android` 里 —— 这样重新执行 `tauri android init` 不会覆盖它。
 
-除 README 之外，接线只有两处，都**已经写入仓库**，此处记录是为了说明为什么：
+除 README 之外，接线只有三处，都**已经写入仓库**，此处记录是为了说明为什么：
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -140,8 +160,13 @@ dependencies {
 `RECEIVE_BOOT_COMPLETED`、`CHANGE_WIFI_MULTICAST_STATE`）以及
 Service / Receiver 声明合并进应用。
 
+**③ 同一个文件 —— release 签名**
+
+`signingConfigs` 块，以及 `buildTypes.release` 里的 `signingConfig = …` 那一行，见 §4.1。
+Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 release 是未签名的，直到把它们补回去。
+
 > 如果重新生成了 `gen/android`（删除后跑 `tauri android init`），
-> 上面两处需要重新加上。这是唯一需要手工维护的生成文件改动。
+> **上面三处**都需要重新加上。这些是仅有的、需要手工维护的生成文件改动。
 
 ### 4.4 运行与打包
 
@@ -245,7 +270,7 @@ Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 | Android 后台不再同步 | 检查前台服务是否在运行（设置页有开关），以及通知权限是否授予 |
 | Android 点「广播剪贴板」跳到前台 | 预期行为，见 §4.5 |
 | `npm install` 后没有 vite | 见 §2 的 `.npmrc` 说明 |
-| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 §4.3 补回两处接线 |
+| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 §4.3 补回三处接线 |
 | `Error: 注释中不允许出现字符串 "--"`（`mergeUniversalDebugResources`） | 某个 `res/values/*.xml` 的**注释里出现了两个连续的连字符**。XML 规范禁止这种写法，而 aapt2 只在资源合并阶段才报，报错位置还很靠后。本仓库踩过一次：`ic_launcher_background.xml` 的注释里写了 `npm run icons -- --bg ...`。`scripts/update-icons.mjs` 现在有断言拦住这个回归 |
 | `SigningConfig`/`compileSdk` 不一致 | 插件模块的 `compileSdk`/Java 版本必须与 `app/build.gradle.kts` 一致（当前 37 / Java 8） |
 

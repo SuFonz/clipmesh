@@ -35,6 +35,54 @@ val resolvedNdkVersion: String =
         ?: System.getenv("NDK_HOME")?.let { file(it).name }
         ?: "29.0.13846066"
 
+// ---------------------------------------------------------------------------
+// Release signing.
+//
+// The keystore and its passwords must never be committed, so all four values
+// are read from *outside* the repository - a Gradle property first, then the
+// environment. Putting them in the global `~/.gradle/gradle.properties` keeps
+// them out of this project entirely and out of `git status`:
+//
+//     KEYSTORE_FILE       path to the .jks / .keystore (absolute, or relative
+//                         to this module's directory)
+//     KEYSTORE_PASSWORD   keystore password
+//     KEY_ALIAS           alias of the key inside it
+//     KEY_PASSWORD        that key's password
+//
+// When any of the four is missing the release build still *configures*, but the
+// APK comes out unsigned and therefore cannot be installed - the warning below
+// names the missing ones rather than letting you find out at install time.
+// ---------------------------------------------------------------------------
+fun signingSecret(name: String): String? =
+    providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+
+// Deliberately not named `keyAlias` / `keyPassword`: inside `create("release")`
+// below, the receiver has properties with those exact names, and a same-named
+// local would turn each assignment into `x = x`.
+val signingStoreFile = signingSecret("KEYSTORE_FILE")
+val signingStorePassword = signingSecret("KEYSTORE_PASSWORD")
+val signingKeyAlias = signingSecret("KEY_ALIAS")
+val signingKeyPassword = signingSecret("KEY_PASSWORD")
+val hasReleaseSigning =
+    signingStoreFile != null && signingStorePassword != null &&
+        signingKeyAlias != null && signingKeyPassword != null
+
+if (!hasReleaseSigning) {
+    val missing = listOf(
+        "KEYSTORE_FILE" to signingStoreFile,
+        "KEYSTORE_PASSWORD" to signingStorePassword,
+        "KEY_ALIAS" to signingKeyAlias,
+        "KEY_PASSWORD" to signingKeyPassword,
+    ).filter { it.second == null }.joinToString(", ") { it.first }
+
+    logger.lifecycle(
+        "ClipMesh: release signing is not configured - missing $missing. " +
+            "Release APKs/AABs will be UNSIGNED and cannot be installed. " +
+            "Set them in ~/.gradle/gradle.properties or the environment.",
+    )
+}
+
 android {
     compileSdk = 37
     namespace = "app.cm.clipmesh"
@@ -46,6 +94,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(signingStoreFile!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -64,10 +122,11 @@ android {
             // that one line:
             //
             //     packaging { jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so") }
-            //
-            // See docs/BUILD.md section 9.
         }
         getByName("release") {
+            // null when the four KEYSTORE_* / KEY_* values are absent, which
+            // leaves the APK unsigned rather than failing the configuration.
+            signingConfig = signingConfigs.findByName("release")
             optimization {
                enable = true
             }
