@@ -1,0 +1,499 @@
+/**
+ * ClipMesh 设计令牌 + 全局重置。
+ *
+ * 只有这一个样式文件是"全局"的：两个 app 通过 `@clipmesh/ui-core` 自动带上它
+ * （见 `index.ts` 的第一行 import）。组件内部一律使用 `scoped` 样式。
+ *
+ * 主题策略：**暗色优先**（`:root` 就是暗色），浅色通过 `prefers-color-scheme: light`
+ * 覆盖同一批自定义属性。没有主题切换按钮，跟随系统。
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* 字体：只用系统字体栈，不引外部字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* 底色与表面 */
+  --bg: #0a0d13;
+  --bg-soft: #0e121a;
+  --surface: #141a23;
+  --surface-2: #1a212c;
+  --surface-3: #222b38;
+  --surface-hover: #1e2733;
+
+  /* 描边 */
+  --border: #232c3a;
+  --border-soft: #1b2330;
+  --border-strong: #334052;
+  /* 语义描边：不用 color-mix，兼容旧 WebView */
+  --border-accent: #2b4c8a;
+  --border-danger: #6d302c;
+  --border-ok: #235b41;
+
+  /* 文本 */
+  --text: #e7eef8;
+  --text-muted: #97a5ba;
+  --text-dim: #6a788d;
+  --text-inverse: #0a0d13;
+
+  /* 主色与语义色 */
+  --accent: #4c8dff;
+  --accent-hover: #6ba0ff;
+  --accent-active: #3a7ae8;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(76, 141, 255, 0.14);
+  --accent-ring: rgba(76, 141, 255, 0.4);
+
+  --ok: #35d07f;
+  --ok-soft: rgba(53, 208, 127, 0.14);
+  --warn: #f2b544;
+  --warn-soft: rgba(242, 181, 68, 0.14);
+  --danger: #ff6157;
+  --danger-hover: #ff7b72;
+  --danger-soft: rgba(255, 97, 87, 0.14);
+  --info: #58c4dc;
+  --info-soft: rgba(88, 196, 220, 0.14);
+
+  /* 阴影 */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.38);
+  --shadow-3: 0 20px 48px rgba(0, 0, 0, 0.5);
+
+  /* 圆角 */
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* 动效 */
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --dur-fast: 110ms;
+  --dur: 170ms;
+
+  /* 布局常量 */
+  --sidebar-w: 220px;
+  --content-max: 1180px;
+  --tabbar-h: 62px;
+  --tap-min: 48px;
+  --header-h: 56px;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #f4f6fb;
+    --bg-soft: #eef1f7;
+    --surface: #ffffff;
+    --surface-2: #f5f7fb;
+    --surface-3: #e9edf5;
+    --surface-hover: #f0f3f9;
+
+    --border: #dde3ed;
+    --border-soft: #e8ecf3;
+    --border-strong: #c9d2e0;
+    --border-accent: #a9c3f0;
+    --border-danger: #efb7b2;
+    --border-ok: #a6ddc0;
+
+    --text: #131a24;
+    --text-muted: #5a6779;
+    --text-dim: #7c8899;
+    --text-inverse: #ffffff;
+
+    --accent: #2f6fe4;
+    --accent-hover: #2a63cf;
+    --accent-active: #2456b8;
+    --accent-soft: rgba(47, 111, 228, 0.1);
+    --accent-ring: rgba(47, 111, 228, 0.32);
+
+    --ok: #16a35c;
+    --ok-soft: rgba(22, 163, 92, 0.12);
+    --warn: #b7791f;
+    --warn-soft: rgba(183, 121, 31, 0.12);
+    --danger: #d93a30;
+    --danger-hover: #c22f26;
+    --danger-soft: rgba(217, 58, 48, 0.1);
+    --info: #1f7f96;
+    --info-soft: rgba(31, 127, 150, 0.12);
+
+    --shadow-1: 0 1px 2px rgba(19, 26, 36, 0.08);
+    --shadow-2: 0 8px 24px rgba(19, 26, 36, 0.1);
+    --shadow-3: 0 20px 48px rgba(19, 26, 36, 0.16);
+
+    --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 重置
+ * ------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* 移动端：防止 WebView 里的横向滚动与点击高亮 */
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* 滚动条：细一点，别抢视线 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-full);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+/* ------------------------------------------------------------------ *
+ * 少量跨组件复用的工具类
+ * ------------------------------------------------------------------ */
+
+.cm-mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+.cm-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cm-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* ------------------------------------------------------------------ *
+ * 视图级排版工具类
+ * 两个 app 的视图共用同一套骨架，避免每个 view 复制一遍头部/表单样式。
+ * ------------------------------------------------------------------ */
+
+.cm-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.cm-page-title {
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.cm-page-sub {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 13px;
+  max-width: 68ch;
+}
+
+.cm-page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.cm-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+
+.cm-grid.wide {
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+
+.cm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.cm-section-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cm-count {
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+/* --- 表单 --- */
+
+.cm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cm-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cm-help {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.cm-input,
+.cm-textarea,
+.cm-select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 13px;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.cm-textarea {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.cm-select {
+  appearance: none;
+  cursor: pointer;
+  /* 手写一个下拉箭头，避免外部资源 */
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% + 1px),
+    calc(100% - 11px) calc(50% + 1px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+
+.cm-input::placeholder,
+.cm-textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.cm-input:hover,
+.cm-textarea:hover,
+.cm-select:hover {
+  border-color: var(--border-strong);
+}
+
+.cm-input:focus-visible,
+.cm-textarea:focus-visible,
+.cm-select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.cm-input.mono,
+.cm-textarea.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.cm-search {
+  position: relative;
+  flex: 1;
+  min-width: 180px;
+}
+
+.cm-search .cm-input {
+  padding-left: 32px;
+}
+
+.cm-search .cm-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+@media (pointer: coarse) {
+  .cm-input,
+  .cm-select {
+    min-height: var(--tap-min);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

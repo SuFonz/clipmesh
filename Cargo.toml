@@ -1,0 +1,134 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/identity",
+    "crates/security",
+    "crates/core",
+    "crates/network",
+    "crates/clipboard",
+    "apps/desktop/src-tauri",
+    "apps/android/src-tauri",
+]
+# `cargo build` / `cargo test` without arguments covers everything that can be
+# built on a normal desktop. The Android host is a separate Tauri app that is
+# only ever compiled by the Tauri mobile CLI (`cargo check --workspace` still
+# includes it).
+default-members = [
+    "crates/protocol",
+    "crates/identity",
+    "crates/security",
+    "crates/core",
+    "crates/network",
+    "crates/clipboard",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/clipmesh/clipmesh"
+homepage = "https://github.com/clipmesh/clipmesh"
+authors = ["ClipMesh contributors"]
+description = "Secure peer-to-peer clipboard sync for Windows, Linux, macOS and Android"
+
+[workspace.dependencies]
+# --- async runtime -----------------------------------------------------------
+tokio = { version = "1.53.2", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "fs",
+    "signal",
+] }
+futures = "0.3.34"
+async-trait = "0.1.92"
+
+# --- serialization ----------------------------------------------------------
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+prost = "0.14.4"
+
+# --- crypto / TLS -----------------------------------------------------------
+# `pem` is required for `to_pkcs8_pem`; without it only DER is available.
+ed25519-dalek = { version = "3.0.0", features = [
+    "rand_core",
+    "pkcs8",
+    "pem",
+    "serde",
+] }
+# Pinned: `LineEnding` lives here and is NOT re-exported by `ed25519_dalek::pkcs8`.
+pkcs8 = { version = "=0.11.0", features = ["alloc", "pem"] }
+# `ring` rather than the default `aws_lc_rs`: no C toolchain, no cmake, no NASM.
+# Spelled out explicitly so a future change to rcgen's defaults cannot pull
+# `aws-lc-sys` in behind our back.
+rcgen = { version = "0.14.10", default-features = false, features = [
+    "crypto",
+    "pem",
+    "ring",
+] }
+# `ring` instead of the default `aws-lc-rs`: no C toolchain, no cmake, no NASM,
+# and it cross-compiles to Android without extra setup.
+rustls = { version = "0.23.45", default-features = false, features = [
+    "ring",
+    "std",
+    "logging",
+    "tls12",
+] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = [
+    "ring",
+    "logging",
+    "tls12",
+] }
+rustls-pki-types = "1.15.1"
+rustls-pemfile = "2.2.0"
+x509-parser = "0.18.1"
+sha2 = "0.11.0"
+rand = "0.10.3"
+subtle = "2.6.1"
+zeroize = { version = "1.9.0", features = ["derive"] }
+hex = "0.4.3"
+base64 = "0.23.1"
+
+# --- networking -------------------------------------------------------------
+mdns-sd = "0.21.4"
+
+# --- clipboard --------------------------------------------------------------
+arboard = "3.6.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+# --- utilities --------------------------------------------------------------
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
+bytes = "1.12.1"
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+parking_lot = "0.12.5"
+dirs = "7.0.0"
+time = { version = "0.3.55", features = ["serde", "formatting"] }
+
+# --- internal crates --------------------------------------------------------
+clipmesh-protocol = { path = "crates/protocol", version = "1.0.0" }
+clipmesh-identity = { path = "crates/identity", version = "1.0.0" }
+clipmesh-security = { path = "crates/security", version = "1.0.0" }
+clipmesh-core = { path = "crates/core", version = "1.0.0" }
+clipmesh-network = { path = "crates/network", version = "1.0.0" }
+clipmesh-clipboard = { path = "crates/clipboard", version = "1.0.0" }
+
+# Release profile lives at the workspace root: member crates cannot override it.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+# Debug builds of the crypto stack are painfully slow without this.
+[profile.dev.package."*"]
+opt-level = 2

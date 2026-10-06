@@ -1,0 +1,17 @@
+<resources>
+    <!--
+      The launcher label and the task-switcher title.
+
+      `tauri android init` writes these from `productName`, lower-cased. Android
+      shows them verbatim under the icon, so they are spelled out here instead:
+      the app is called ClipMesh, not clipmesh.
+
+      The surrounding double quotes are Android's way of preserving a value as
+      written; they are not part of the string. This file is part of the
+      generated project that the repo tracks, not one of the three files the
+      build rewrites (`tauri.build.gradle.kts`, `tauri.properties`,
+      `tauri.settings.gradle`), so the edit sticks. See docs/MAINTENANCE.md §1.
+    -->
+    <string name="app_name">"ClipMesh"</string>
+    <string name="main_activity_title">"ClipMesh"</string>
+</resources>

@@ -1,0 +1,34 @@
+[package]
+name = "clipmesh-clipboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ClipMesh platform clipboard access: arboard on desktop, a Kotlin bridge on Android"
+
+[dependencies]
+clipmesh-protocol.workspace = true
+clipmesh-core.workspace = true
+
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+
+# Desktop only: `arboard` has no Android backend, and pulling it in for a
+# mobile build would fail to link.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true
+image.workspace = true
+
+# A cheap change counter, so we do not have to read the clipboard to notice
+# that it changed.
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5.4.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

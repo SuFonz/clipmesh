@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "Capability for the ClipMesh mobile window",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default"]
+}

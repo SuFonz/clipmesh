@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.clipmesh"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          NOTE: the FileProvider used to be declared here, with
+          `res/xml/file_paths.xml` beside it. It now lives in the plugin module
+          (`apps/android/plugins/bridge/src/main/AndroidManifest.xml`), which
+          `tauri android init` cannot overwrite, and which gives it the same
+          `${applicationId}.fileprovider` authority. Do not add it back here:
+          two declarations of the same provider are merged, and the
+          `FILE_PROVIDER_PATHS` meta-data would then have two different values -
+          a build failure, not a harmless duplicate.
+        -->
+    </application>
+</manifest>

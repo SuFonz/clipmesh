@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ClipMesh Android plugin manifest.
+
+  Merged into the application manifest at build time, which is why the plugin
+  can declare its own permissions and components instead of asking the
+  generated project to.
+
+  - FOREGROUND_SERVICE + FOREGROUND_SERVICE_DATA_SYNC: keep the sync engine
+    alive while the app is in the background. Android 14 requires the specific
+    type, not just the generic permission.
+  - POST_NOTIFICATIONS: Android 13 and later need this to show anything at all,
+    including the foreground service notification.
+  - RECEIVE_BOOT_COMPLETED: restart the service after a reboot so a paired
+    desktop can keep syncing without the user opening the app.
+  - READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE: the screenshot watcher. A content
+    observer on MediaStore fires without them, but the image bytes are
+    unreadable, so the feature cannot work without one of the two - and the two
+    are not interchangeable: READ_MEDIA_IMAGES exists from Android 13, and
+    READ_EXTERNAL_STORAGE is capped at 32 so it is not requested on a system
+    where it would still be granted but means nothing.
+  - READ_MEDIA_VISUAL_USER_SELECTED: Android 14's "selected photos only" grant.
+    Declared so the user *can* pick it, and checked but never requested: the
+    system hands it over as part of the READ_MEDIA_IMAGES dialog. Under it the
+    watcher only sees the chosen images, which is why the settings screen says so
+    instead of pretending the feature works.
+
+  The FileProvider is declared here rather than in the generated project for the
+  same reason as everything else in this file: `tauri android init` would
+  overwrite `gen/android`, and the authority has to be `${applicationId}` so that
+  it follows whatever application id the app is built with.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <application>
+        <service
+            android:name="app.cm.clipmesh.bridge.foregroundservice.ClipMeshService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name="app.cm.clipmesh.bridge.foregroundservice.ClipboardActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
+            android:name="app.cm.clipmesh.bridge.foregroundservice.BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          The share sheet's doorway, and the only place a content:// URI of ours
+          is handed to another app.
+
+          - `grantUriPermissions="true"` is what lets a chooser target read the
+            file; the URIs themselves are built by `SharedImages` and are always
+            `content://` - never a `file://` path, which Android 7 and later
+            refuse from one app to another.
+          - `exported="false"`: nothing outside the app may query it. The grant
+            travels with the individual URI, not with the provider.
+          - `@xml/clipmesh_file_paths` names the one directory that is exposed:
+            `cacheDir/share/`, where a received image or a history image is
+            staged for sharing. The clipboard's own staging directory is exposed
+            too, because `setImage` puts its PNG on the clipboard as a URI.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/clipmesh_file_paths" />
+        </provider>
+
+        <!--
+          The "broadcast clipboard" notification action lands here.
+
+          - `Theme.Translucent.NoTitleBar` shows nothing while the window holds
+            the focus Android demands before it hands over the clipboard. It is
+            deliberately *not* a Dialog/floating theme: floating windows are not
+            focusable by default, and a window without focus cannot read the
+            clipboard, which would make the whole activity pointless.
+          - its own task affinity, plus `excludeFromRecents` and `noHistory`, so
+            it never joins the app's task, never shows up in the recents list,
+            and cannot be left behind invisible.
+          - `exported="false"`: only our own notification's PendingIntent may
+            start it, and it reads the clipboard.
+        -->
+        <activity
+            android:name="app.cm.clipmesh.bridge.broadcast.BroadcastActivity"
+            android:enabled="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity="app.cm.clipmesh.broadcast"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:finishOnTaskLaunch="true"
+            android:allowTaskReparenting="false" />
+
+        <!--
+          The image notification's share action lands here, for the same reason
+          and with the same shape: a notification action cannot start a chooser
+          from the background, but an activity it started can. See
+          `ShareActivity`.
+        -->
+        <activity
+            android:name="app.cm.clipmesh.bridge.share.ShareActivity"
+            android:enabled="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity="app.cm.clipmesh.share"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:finishOnTaskLaunch="true"
+            android:allowTaskReparenting="false" />
+    </application>
+</manifest>

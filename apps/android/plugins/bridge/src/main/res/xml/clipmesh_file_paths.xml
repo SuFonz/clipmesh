@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the plugin's FileProvider exposes, and nothing more.
+
+  Every path here is a `cache-path` entry, i.e. a directory under the app's
+  private `cacheDir`. There is deliberately no `<external-path>` and no
+  `<root-path>`: an image ClipMesh shares is one it copied into its own cache
+  first, so the provider never has to hand out a path on shared storage - and
+  neither does it expose the rest of its cache, which the first version of this
+  app did (`<cache-path path="." />`).
+
+  - `clipmesh_share` -> `cacheDir/share/`: images staged for `ACTION_SEND`, by
+    `SharedImages` (a received image the notification offers to share, and a
+    history image the user asked to share).
+  - `clipmesh_clipboard` -> `cacheDir/clipboard/`: the PNG that `setImage` puts on
+    the system clipboard as a `content://` URI. It has to be listed here too, or
+    `FileProvider.getUriForFile` throws "Failed to find configured root".
+
+  The file names inside these directories are built by `SharedImages`, which
+  sanitises an entry id before using it as part of a name - a peer-supplied id
+  must never be able to name a path.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="clipmesh_share" path="share/" />
+    <cache-path name="clipmesh_clipboard" path="clipboard/" />
+</paths>

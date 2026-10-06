@@ -1,0 +1,190 @@
+// ClipMesh wire protocol.
+//
+// Design notes
+// ------------
+// * No central server: every message is exchanged directly between two peers.
+// * Every connection is mutually authenticated with TLS 1.3, so this schema
+//   never carries secrets - it only carries *identity claims* and *payload*.
+// * Images are NEVER base64 encoded. `ClipboardImage` carries metadata only,
+//   the pixels travel as raw binary in `ImageChunk` frames on the same TCP
+//   stream (see crates/protocol/src/frame.rs).
+syntax = "proto3";
+
+package clipmesh.v1;
+
+// ---------------------------------------------------------------------------
+// Common types
+// ---------------------------------------------------------------------------
+
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_WINDOWS = 1;
+  PLATFORM_LINUX = 2;
+  PLATFORM_MACOS = 3;
+  PLATFORM_ANDROID = 4;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  // The peer is not in our trust store and we are not accepting new pairings.
+  ERROR_CODE_UNTRUSTED_DEVICE = 1;
+  // The Hello signature did not verify against the advertised public key.
+  ERROR_CODE_IDENTITY_MISMATCH = 2;
+  ERROR_CODE_PROTOCOL_VERSION_MISMATCH = 3;
+  ERROR_CODE_MALFORMED_MESSAGE = 4;
+  ERROR_CODE_PAYLOAD_TOO_LARGE = 5;
+  ERROR_CODE_CHECKSUM_MISMATCH = 6;
+  ERROR_CODE_INTERNAL = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+
+// Sent by the device that initiates pairing. Carries everything the receiver
+// needs to render a "new device wants to pair" prompt, including the
+// certificate fingerprint the user is expected to compare out of band.
+message PairRequest {
+  string device_id = 1;
+  string name = 2;
+  Platform platform = 3;
+  bytes public_key = 4; // 32 byte raw Ed25519 public key
+  bytes certificate = 5; // DER encoded self-signed X.509 certificate
+  string fingerprint = 6; // human readable form of sha256(certificate)
+  int64 timestamp = 7; // unix milliseconds
+  bytes nonce = 8; // 32 random bytes, echoed back inside PairAccept.signature
+}
+
+// The receiver's answer. `accepted = false` is a normal rejection, not an
+// error: the initiator must not retry until the user acts again.
+message PairAccept {
+  bool accepted = 1;
+  string device_id = 2;
+  string name = 3;
+  Platform platform = 4;
+  bytes public_key = 5;
+  bytes certificate = 6;
+  string fingerprint = 7;
+  string reason = 8; // shown to the user when accepted = false
+  // Ed25519 signature over sha256("clipmesh-pair-accept-v1" || nonce ||
+  // responder_device_id). Proves the responder owns the private key that
+  // matches `public_key`, so a passive attacker cannot forge an accept.
+  bytes signature = 9;
+}
+
+// ---------------------------------------------------------------------------
+// Session establishment
+// ---------------------------------------------------------------------------
+
+// First application level message on every (re)connection, exchanged in both
+// directions. The signature is bound to the TLS channel via the exporter
+// secret, so a man in the middle cannot relay it onto another connection.
+message Hello {
+  string device_id = 1;
+  string name = 2;
+  Platform platform = 3;
+  bytes public_key = 4;
+  string fingerprint = 5;
+  // 32 random bytes chosen by the sender.
+  bytes challenge = 6;
+  // Ed25519 signature over
+  // sha256("clipmesh-hello-v1" || challenge || channel_binding)
+  bytes signature = 7;
+  uint32 protocol_version = 8;
+}
+
+message HelloAck {
+  string device_id = 1;
+  // Signature over
+  // sha256("clipmesh-hello-ack-v1" || peer_challenge || channel_binding)
+  bytes signature = 2;
+  uint32 protocol_version = 3;
+  // Whether the sender considers the receiver trusted after this handshake.
+  bool trusted = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard payloads
+// ---------------------------------------------------------------------------
+
+// `id` is a UUIDv4 minted by the origin device. It travels unchanged across
+// the mesh and is the deduplication key: a device that has already seen an id
+// never forwards or applies it twice.
+message ClipboardText {
+  string id = 1;
+  string source_device = 2;
+  int64 timestamp = 3; // unix milliseconds, origin clock
+  string content = 4;
+}
+
+// Metadata for an image. The pixels follow on the same stream as raw bytes
+// inside one or more `ImageChunk` messages - never base64, never inline.
+message ClipboardImage {
+  string id = 1;
+  string source_device = 2;
+  int64 timestamp = 3;
+  string mime = 4; // "image/png"
+  uint64 size = 5; // total payload bytes
+  uint32 width = 6;
+  uint32 height = 7;
+  // sha256 of the full PNG payload, verified before the image is applied.
+  bytes sha256 = 8;
+}
+
+// A slice of the image payload. Chunking keeps memory bounded (a 4K
+// screenshot is ~10 MiB) and lets us report progress to the UI.
+message ImageChunk {
+  string id = 1; // must match the preceding ClipboardImage.id
+  uint64 offset = 2;
+  bytes data = 3;
+  bool last = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Control
+// ---------------------------------------------------------------------------
+
+message Ack {
+  string id = 1; // id of the message being acknowledged
+  bool ok = 2;
+  string message = 3;
+}
+
+message ErrorMessage {
+  ErrorCode code = 1;
+  string message = 2;
+  string related_id = 3;
+}
+
+message Ping {
+  int64 timestamp = 1;
+}
+
+message Pong {
+  int64 timestamp = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope
+// ---------------------------------------------------------------------------
+
+// Every frame on the wire is exactly one length-delimited, serialized
+// `Envelope`. One envelope per frame keeps framing trivial and lets us add
+// message types without touching the transport.
+message Envelope {
+  uint32 protocol_version = 1;
+  string message_id = 2; // UUIDv4, unique per frame, for logs and ACKs
+  oneof payload {
+    PairRequest pair_request = 10;
+    PairAccept pair_accept = 11;
+    Hello hello = 12;
+    HelloAck hello_ack = 13;
+    ClipboardText clipboard_text = 14;
+    ClipboardImage clipboard_image = 15;
+    ImageChunk image_chunk = 16;
+    Ack ack = 17;
+    ErrorMessage error = 18;
+    Ping ping = 19;
+    Pong pong = 20;
+  }
+}

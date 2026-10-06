@@ -1,3 +1,54 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules
+dist
+dist-ssr
+*.local
+
+# Tauri generates these next to the app; they are per machine.
+**/src-tauri/gen/schemas
+
+# Android build output. `gen/android` itself IS tracked: it is what
+# `tauri android init` produces and it carries the hand-written wiring described
+# in docs/MAINTENANCE.md §1.
+**/src-tauri/gen/android/.gradle
+**/src-tauri/gen/android/build
+**/src-tauri/gen/android/app/build
+**/src-tauri/gen/android/local.properties
+**/src-tauri/gen/android/.idea
+**/src-tauri/gen/android/app/src/main/jniLibs
+# Any Android library module under apps/*/plugins/ (currently just `bridge`).
+**/plugins/*/build
+**/plugins/*/.gradle
+
+# Kotlin 2.x drops compiler session files (and daemon logs) into `.kotlin/` next
+# to the build. They are regenerated on every compile and carry a random number
+# in the name, so without this every build dirties `git status`.
+**/.kotlin
+
+# ---------------------------------------------------------------------------
+# Secrets - a safety net, not a fix.
+#
+# Nothing here should ever exist in the working tree: the release signing config
+# reads its four values from the *global* `~/.gradle/gradle.properties` or the
+# environment (README.md, Android → "Environment variables"), and the device identity is generated into the
+# per-user app config directory at first run. These patterns exist so that the
+# day someone drops a keystore into the repo by hand, git refuses it instead of
+# committing it.
+#
+# A committed signing key cannot be un-leaked by deleting it later: it would
+# still be in the history, and in every clone. If this ever fires, rotate the key
+# rather than rewriting history.
+# ---------------------------------------------------------------------------
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
+
 # Logs
 logs
 *.log
@@ -5,20 +56,18 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
