@@ -128,7 +128,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 Kotlin 插件在 `apps/android/plugins/bridge/`，是**独立的 Gradle library 模块**，
 不在 `gen/android` 里 —— 这样重新执行 `tauri android init` 不会覆盖它。
 
-除 README 之外，接线只有三处，都**已经写入仓库**，此处记录是为了说明为什么：
+除 README 之外，`gen/android` 里有**四处**需要手工维护，都**已经写入仓库**，此处记录是为了说明为什么：
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -165,8 +165,17 @@ Service / Receiver 声明合并进应用。
 `signingConfigs` 块，以及 `buildTypes.release` 里的 `signingConfig = …` 那一行，见 §4.1。
 Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 release 是未签名的，直到把它们补回去。
 
+**④ `apps/android/src-tauri/gen/android/app/src/main/java/app/cm/clipmesh/MainActivity.kt`**
+
+让网页内容避开系统栏。生成出来的项目里没有任何东西做这件事：`enableEdgeToEdge()` 让 webview 铺满整块屏幕
+（而 `targetSdk = 35` 之后，就算删掉这行调用，系统也照样强制 edge-to-edge），所以 `onWebViewCreate` 用
+`systemBars() | displayCutout()` 给 webview 的父容器（内容帧）加内边距。见 §4.7 —— 代码很短，但它是底部
+标签栏和导航键之间唯一的那道防线。
+
 > 如果重新生成了 `gen/android`（删除后跑 `tauri android init`），
-> **上面三处**都需要重新加上。这些是仅有的、需要手工维护的生成文件改动。
+> **上面四处**都需要重新加上。这些是仅有的、需要手工维护的生成文件改动。
+> （`apps/android/plugins/bridge/consumer-rules.pro` 故意**不在**这份清单里：它是 R8 keep 规则而不是接线，
+> 位于 `gen/android` 之外的插件模块中，通过 `consumerProguardFiles` 生效 —— 见 §4.6。）
 
 ### 4.4 运行与打包
 
@@ -232,6 +241,43 @@ Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运
 Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 `ANDROID_PLUGIN_PACKAGE` / `ANDROID_PLUGIN_CLASS` 常量里。
 
+### 4.6 release 构建：R8 与插件的 keep 规则
+
+release 是开了压缩混淆的（`app/build.gradle.kts` 里的 `optimization { enable = true }`），而插件唯一依赖的
+反射路径 R8 看不见：`Invoke.parseArgs(SetTextArgs::class.java)` 用 **Jackson** 反序列化命令参数，靠的是运行时
+拿到的那个 class。在 keep 规则存在之前，release 会把它改名成 `d20` 并删掉构造函数和 setter，于是**所有带参数的
+`@Command`**（`setText`、`setImage`、`showReceived`）在运行时全部失败 —— 而不做混淆的 debug 构建一切正常：
+
+```
+Cannot construct instance of `d20` (no Creators, like default constructor, exist)
+```
+
+规则在 **`apps/android/plugins/bridge/consumer-rules.pro`**，通过插件模块 `defaultConfig` 里的
+`consumerProguardFiles("consumer-rules.pro")` 挂上。这是 library 模块声明「使用方不能删掉什么」的惯用位置：
+AGP 会把 library 的 consumer 规则合进每一个开启压缩的使用方，本仓库的 R8 配置就能证明这条链路是通的
+（`build/outputs/mapping/*/configuration.txt` 里有 "Local project :::tauri-android" 与
+"…:::tauri-plugin-opener" 两段），所以不需要往 `gen/android/app/proguard-rules.pro` 里加任何东西 ——
+那个文件迟早会被 `tauri android init` 覆盖。
+
+**新增一个带参数的 `@Command`，就要把它的参数类加到那份规则里。** `@Command` 方法本身由 `:tauri-android`
+自带的 consumer 规则保住，清单里的组件（Activity / Service / Receiver）由 AGP 的 `aapt_rules.txt` 保住 ——
+参数类是唯一漏掉的一环。
+
+### 4.7 edge-to-edge、系统栏与 `env(safe-area-inset-*)`
+
+`targetSdk = 37` 意味着系统强制 Activity 走 edge-to-edge，webview 会铺满整块屏幕，底部导航栏压在它上面。
+而 Android **不会**把这个 inset 交给 CSS：WebView 只按「显示挖孔」填充 `env(safe-area-inset-*)`，而且只在它占满
+整屏时才会填，所以没有刘海的手机上这些值全是 `0px`。这个留白只能做成布局内边距，位置就是
+**④ `MainActivity.kt`**（`onWebViewCreate` 用 `systemBars() | displayCutout()` 给 webview 的父容器加内边距）。
+
+动任何一侧之前，有两点值得先知道：
+
+- `apps/android/ui` 的 `MobileLayout.vue` **不要**再叠加 `env(safe-area-inset-*)`：在真的会报系统栏的 WebView
+  上两者会相加，留白变成两倍。
+- 内边距加在**父容器**而不是 webview 上：加在 webview 上，它自己的边界仍然覆盖着系统栏那一条，而状态栏那一条
+  不该由应用来画 —— 那个窗口在应用窗口之上，还会吃掉触摸。留给系统栏的空白会退回主题的 DayNight
+  `windowBackground`。
+
 ---
 
 ## 5. 数据存放位置
@@ -270,7 +316,9 @@ Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 | Android 后台不再同步 | 检查前台服务是否在运行（设置页有开关），以及通知权限是否授予 |
 | Android 点「广播剪贴板」跳到前台 | 预期行为，见 §4.5 |
 | `npm install` 后没有 vite | 见 §2 的 `.npmrc` 说明 |
-| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 §4.3 补回三处接线 |
+| Gradle 找不到 `:bridge` | `gen/android` 被重新生成了，按 §4.3 补回四处 |
+| **release** 构建在写剪贴板（或图片、通知）时报 ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` | R8 删掉了 `Invoke.parseArgs` 用反射反序列化的参数类。`apps/android/plugins/bridge/consumer-rules.pro` 负责保住它们；如果新加了带参数的 `@Command`，要把它一起加进去。见 §4.6 |
+| 内容被状态栏或导航栏盖住 | webview 没让开。在 Android 上 `env(safe-area-inset-*)` 解决不了（见 §4.7）—— 先确认 §4.3 的第 ④ 处还在 `MainActivity.kt` 里，再确认移动端布局没有把 `env()` 加回来 |
 | `Error: 注释中不允许出现字符串 "--"`（`mergeUniversalDebugResources`） | 某个 `res/values/*.xml` 的**注释里出现了两个连续的连字符**。XML 规范禁止这种写法，而 aapt2 只在资源合并阶段才报，报错位置还很靠后。本仓库踩过一次：`ic_launcher_background.xml` 的注释里写了 `npm run icons -- --bg ...`。`scripts/update-icons.mjs` 现在有断言拦住这个回归 |
 | `SigningConfig`/`compileSdk` 不一致 | 插件模块的 `compileSdk`/Java 版本必须与 `app/build.gradle.kts` 一致（当前 37 / Java 8） |
 

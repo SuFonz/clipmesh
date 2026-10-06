@@ -20,7 +20,17 @@ import {
 
 /**
  * Android 外壳：顶部标题栏 + 单列内容 + 底部 4 标签栏。
- * 所有触摸目标 ≥48px，并且处理了 `env(safe-area-inset-*)`（刘海屏 / 手势条）。
+ * 所有触摸目标 ≥48px。
+ *
+ * 系统栏留白**不在这里**。Android 的 WebView 只在整屏时按「显示挖孔」填充
+ * `env(safe-area-inset-*)`，状态栏和导航栏从不报给 CSS，所以过去那两处 env() 在真机上
+ * 恒等于 0 —— 这正是底栏一直被导航键盖住的原因。现在由原生侧让开：
+ * `src-tauri/gen/android/app/src/main/java/app/cm/clipmesh/MainActivity.kt` 用
+ * `systemBars() | displayCutout()` 给 webview 的父容器（内容帧）加内边距，webview 随之
+ * 缩小，页面视口就落在安全区里了。
+ *
+ * 因此这里**不要**再补 `env(safe-area-inset-*)`：在真机上它要么是 0（白写），要么在
+ * 会报系统栏的 WebView 版本上与原生内边距叠加，把留白撑成两倍。要调留白就改原生那层。
  */
 interface Tab {
   to: string;
@@ -207,9 +217,8 @@ async function broadcast(): Promise<void> {
   align-items: center;
   gap: var(--space-3);
   flex: none;
+  /* 状态栏 / 刘海由原生侧让开（见文件头），这里只留设计上的内边距 */
   padding: 10px 14px;
-  /* 刘海屏 / 状态栏 */
-  padding-top: calc(10px + env(safe-area-inset-top, 0px));
   background: var(--bg-soft);
   border-bottom: 1px solid var(--border);
 }
@@ -304,8 +313,7 @@ async function broadcast(): Promise<void> {
   flex: none;
   background: var(--bg-soft);
   border-top: 1px solid var(--border);
-  /* 手势条 */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* 手势条 / 导航栏由原生侧让开（见文件头），这里不再补 env(safe-area-inset-bottom) */
 }
 
 .tab {

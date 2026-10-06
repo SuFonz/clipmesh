@@ -128,7 +128,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 The Kotlin plugin lives in `apps/android/plugins/bridge/` as a **standalone Gradle library module**,
 outside `gen/android` — that way re-running `tauri android init` does not overwrite it.
 
-Beyond the README, there are only three wiring points, all **already committed to the repo**; they are recorded here to explain why:
+Beyond the README, `gen/android` needs **four** hand-maintained places, all **already committed to the repo**; they are recorded here to explain why:
 
 **① `apps/android/src-tauri/gen/android/settings.gradle`**
 
@@ -164,8 +164,19 @@ The plugin's `AndroidManifest.xml` uses the manifest merger to merge its permiss
 The `signingConfigs` block and the `signingConfig = …` line inside `buildTypes.release`, described in §4.1.
 Tauri's template ships neither, so a regenerated project produces unsigned release builds until they are put back.
 
-> If `gen/android` is regenerated (delete it, then run `tauri android init`), **all three places above** have
+**④ `apps/android/src-tauri/gen/android/app/src/main/java/app/cm/clipmesh/MainActivity.kt`**
+
+The activity keeps the web content out from under the system bars, which nothing in the generated project does:
+`enableEdgeToEdge()` makes the webview cover the whole display — and from `targetSdk = 35` the platform enforces
+that whether or not the call is there — so `onWebViewCreate` pads the webview's parent content frame by
+`systemBars() | displayCutout()`. See §4.7: the code is small, but it is the only thing standing between the
+bottom tab bar and the navigation bar.
+
+> If `gen/android` is regenerated (delete it, then run `tauri android init`), **all four places above** have
 > to be added back. These are the only generated-file changes that need manual maintenance.
+> (`apps/android/plugins/bridge/consumer-rules.pro` is deliberately **not** on the list: it contains R8 keep
+> rules rather than wiring, lives in the plugin module outside `gen/android`, and reaches the app through
+> `consumerProguardFiles` — see §4.6.)
 
 ### 4.4 Running and packaging
 
@@ -233,6 +244,47 @@ Rust ↔ Kotlin method names correspond one-to-one, and **changing one side mean
 The Kotlin class name and package name are in the
 `ANDROID_PLUGIN_PACKAGE` / `ANDROID_PLUGIN_CLASS` constants in `apps/android/src-tauri/src/plugin.rs`.
 
+### 4.6 Release builds: R8 and the plugin's keep rules
+
+Release is minified (`optimization { enable = true }` in `app/build.gradle.kts`), and R8 cannot see the one
+reflective path the plugin depends on: `Invoke.parseArgs(SetTextArgs::class.java)` deserialises a command's
+payload with **Jackson**, over the class object it is handed. Before the keep rules existed a release build
+renamed `SetTextArgs` to `d20` and stripped its constructor and setters, so **every `@Command` that takes
+arguments** (`setText`, `setImage`, `showReceived`) failed at runtime — while the debug build, which does not
+minify, worked:
+
+```
+Cannot construct instance of `d20` (no Creators, like default constructor, exist)
+```
+
+The rules live in **`apps/android/plugins/bridge/consumer-rules.pro`** and are attached with
+`consumerProguardFiles("consumer-rules.pro")` in the plugin module's `defaultConfig`. That is the idiomatic
+place for the declaration — AGP folds a library's consumer rules into every minified consumer of it, and the
+app's own R8 configuration proves the mechanism (`build/outputs/mapping/*/configuration.txt` carries
+"Local project :::tauri-android" and "…:::tauri-plugin-opener" sections), so nothing has to be added to
+`gen/android/app/proguard-rules.pro`, where `tauri android init` would eventually overwrite it.
+
+**Adding a parameterised `@Command` means adding its argument class to those rules.** The `@Command` methods
+themselves are kept by `:tauri-android`'s own consumer rules, and manifest components (the activities, the
+service, the receivers) by AGP's `aapt_rules.txt` — the argument classes were the only gap.
+
+### 4.7 Edge-to-edge, the system bars, and `env(safe-area-inset-*)`
+
+`targetSdk = 37` means the platform forces the activity edge-to-edge, so the webview is laid out over the whole
+display and the bottom navigation bar overlays it. Android does **not** hand that inset to CSS: the WebView
+fills `env(safe-area-inset-*)` in only for the display *cutout*, and only while it occupies the entire screen, so
+on a phone without a notch every one of those values is `0px`. The inset therefore has to be a layout inset, and
+it is applied in **④ `MainActivity.kt`** (`onWebViewCreate` pads the webview's parent content frame by
+`systemBars() | displayCutout()`).
+
+Two consequences worth knowing before touching either side:
+
+- `apps/android/ui`'s `MobileLayout.vue` must **not** also add `env(safe-area-inset-*)`. On a WebView that does
+  report system bars the two would stack, and the layout would reserve the bar height twice.
+- The padding goes on the *parent* rather than on the webview: padding the webview would leave its own bounds
+  covering the bar strips, and the strip behind the status bar is not the app's to draw in — that window is
+  above the app's and eats the touches. The strips fall back to the theme's DayNight `windowBackground`.
+
 ---
 
 ## 5. Where data is stored
@@ -271,7 +323,9 @@ The Kotlin class name and package name are in the
 | Android no longer syncs in the background | Check whether the foreground service is running (there is a switch on the settings page) and whether notification permission has been granted |
 | Tapping "Broadcast clipboard" on Android jumps to the foreground | Expected behaviour, see §4.5 |
 | No vite after `npm install` | See the `.npmrc` note in §2 |
-| Gradle cannot find `:bridge` | `gen/android` was regenerated; add all three wiring points back as described in §4.3 |
+| Gradle cannot find `:bridge` | `gen/android` was regenerated; add all four places back as described in §4.3 |
+| A **release** build fails with ``Cannot construct instance of `d20` (no Creators, like default constructor, exist)`` when writing the clipboard (or the image, or showing the notification) | R8 stripped an argument class that `Invoke.parseArgs` deserialises by reflection. `apps/android/plugins/bridge/consumer-rules.pro` keeps them; if a new parameterised `@Command` was added, its argument class has to be added there too. See §4.6 |
+| Content sits under the status or navigation bar | The webview is not inset. `env(safe-area-inset-*)` cannot fix it on Android (see §4.7) — check that place ④ in §4.3 is still in `MainActivity.kt`, and that the mobile layout has not added `env()` back on top of it |
 | `Error: The string "--" is not allowed in comments` (`mergeUniversalDebugResources`) | Two consecutive hyphens appear **inside a comment** in one of the `res/values/*.xml` files. The XML spec forbids that, and aapt2 only reports it during resource merging, at a position far from the real one. This repo hit it once: a comment in `ic_launcher_background.xml` contained `npm run icons -- --bg ...`. `scripts/update-icons.mjs` now has an assertion that stops this regression |
 | `SigningConfig`/`compileSdk` mismatch | The plugin module's `compileSdk`/Java version must match `app/build.gradle.kts` (currently 37 / Java 8) |
 

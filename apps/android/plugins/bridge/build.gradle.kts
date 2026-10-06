@@ -21,6 +21,15 @@ android {
 
     defaultConfig {
         minSdk = 24
+
+        // What a *consumer's* R8 must not strip out of this module: the argument
+        // classes `Invoke.parseArgs` deserialises by reflection, which the app's
+        // release build otherwise renames and guts - see consumer-rules.pro and
+        // docs/BUILD.md. Declared here rather than in the app module's
+        // `gen/android/app/proguard-rules.pro` because the rules describe this
+        // module's classes, they travel with it, and `tauri android init` may
+        // rewrite that generated file at any time.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {
