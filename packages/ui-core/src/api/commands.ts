@@ -137,6 +137,17 @@ export function androidServiceRunning(): Promise<boolean> {
   return call("android_service_running");
 }
 
+/**
+ * 查询通知权限当前是否已授予（不弹框）。
+ *
+ * 与 `androidRequestNotificationPermission` 的区别就在这里：那个会**弹**系统
+ * 对话框，只能用在用户明确要求的时候；显示权限状态必须用这个，否则每次打开
+ * 设置页都会问用户一遍。
+ */
+export function androidNotificationPermission(): Promise<boolean> {
+  return call("android_notification_permission");
+}
+
 export function androidRequestNotificationPermission(): Promise<boolean> {
   return call("android_request_notification_permission");
 }
@@ -176,6 +187,7 @@ export const androidApi = {
   startService: androidStartService,
   stopService: androidStopService,
   isServiceRunning: androidServiceRunning,
+  isNotificationPermissionGranted: androidNotificationPermission,
   requestNotificationPermission: androidRequestNotificationPermission,
   leaveApp: androidLeaveApp,
 } as const;

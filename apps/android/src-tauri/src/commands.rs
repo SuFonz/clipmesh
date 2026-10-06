@@ -68,6 +68,18 @@ pub async fn android_leave_app(state: State<'_, NativeState>) -> Ipc<()> {
     bridge.leave_app().map_err(fail)
 }
 
+/// Whether the notification permission is granted (Android 13 and later).
+///
+/// The query half of [`android_request_notification_permission`]: the settings
+/// toggle is displayed from this answer, so it must not show the system dialog.
+#[tauri::command]
+pub async fn android_notification_permission(state: State<'_, NativeState>) -> Ipc<bool> {
+    let bridge = state.bridge.clone();
+    bridge
+        .notification_permission()
+        .map_err(|error| fail(format!("could not read the permission: {error}")))
+}
+
 /// Ask for the notification permission (Android 13 and later).
 #[tauri::command]
 pub async fn android_request_notification_permission(state: State<'_, NativeState>) -> Ipc<bool> {

@@ -193,12 +193,21 @@ impl<R: Runtime> NativeBridge<R> {
     /// # Errors
     /// Returns the JNI failure as a string.
     pub fn request_notification_permission(&self) -> Result<bool, String> {
-        #[derive(Deserialize)]
-        struct Granted {
-            granted: bool,
-        }
+        self.call::<NotificationPermission>("requestNotificationPermission", ())
+            .map(|response| response.granted)
+    }
 
-        self.call::<Granted>("requestNotificationPermission", ())
+    /// Whether the notification permission is currently granted (Android 13+).
+    ///
+    /// The query half of [`Self::request_notification_permission`], and the
+    /// reason there are two: the settings toggle is *displayed* from this, and a
+    /// display must not put the system dialog in front of the user. Below
+    /// Android 13 there is no runtime permission and Kotlin answers `true`.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn notification_permission(&self) -> Result<bool, String> {
+        self.call::<NotificationPermission>("notificationPermission", ())
             .map(|response| response.granted)
     }
 
@@ -229,6 +238,16 @@ impl<R: Runtime> NativeBridge<R> {
     pub fn take_broadcast(&self) -> Result<BroadcastPickup, String> {
         self.call("takeBroadcast", ())
     }
+}
+
+/// What Kotlin answers when asked about the notification permission.
+///
+/// Both the query and the prompt resolve this same `{"granted": …}` object, and
+/// the UI compares the two answers - one shape keeps them from drifting apart.
+#[derive(Deserialize)]
+struct NotificationPermission {
+    /// Whether POST_NOTIFICATIONS is held (always true below Android 13).
+    granted: bool,
 }
 
 /// What Kotlin answers when asked whether the notification asked for a broadcast.
@@ -317,6 +336,24 @@ mod tests {
     // checked from this side - a renamed field would otherwise only fail on a
     // device, where it fails silently: the poll would answer "nothing to do"
     // forever and the notification button would stop working.
+
+    #[test]
+    fn a_permission_answer_must_carry_the_granted_flag() {
+        // Both `ClipMeshPlugin.notificationPermission` and its prompt
+        // counterpart resolve this object, and the settings toggle is drawn from
+        // the query's answer. A renamed key would otherwise only fail on a
+        // device, as a toggle that reads "off" while the service is running.
+        let granted: NotificationPermission = serde_json::from_str(r#"{"granted":true}"#).unwrap();
+        assert!(granted.granted);
+
+        let denied: NotificationPermission = serde_json::from_str(r#"{"granted":false}"#).unwrap();
+        assert!(!denied.granted);
+
+        assert!(
+            serde_json::from_str::<NotificationPermission>(r#"{"allowed":true}"#).is_err(),
+            "a missing `granted` is a Kotlin/Rust contract break, not a default"
+        );
+    }
 
     #[test]
     fn an_idle_answer_says_so() {

@@ -217,6 +217,23 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(granted(hasNotificationPermission()))
     }
 
+    /**
+     * Report the current POST_NOTIFICATIONS state and ask nothing.
+     *
+     * The settings screen's "keep running" toggle is *displayed* from this
+     * answer: [requestNotificationPermission] resolves the same boolean but puts
+     * the system dialog in front of it, which would turn "show me the state"
+     * into a question the user never asked - on every visit to that screen.
+     *
+     * Below Android 13 there is no runtime permission to hold, so
+     * [hasNotificationPermission] answers `true` and the toggle simply follows
+     * the service.
+     */
+    @Command
+    fun notificationPermission(invoke: Invoke) {
+        invoke.resolve(granted(hasNotificationPermission()))
+    }
+
     private fun hasNotificationPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(

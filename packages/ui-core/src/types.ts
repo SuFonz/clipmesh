@@ -154,6 +154,7 @@ export interface CommandMap {
   android_start_service: { args: void; result: void };
   android_stop_service: { args: void; result: void };
   android_service_running: { args: void; result: boolean };
+  android_notification_permission: { args: void; result: boolean };
   android_request_notification_permission: { args: void; result: boolean };
   android_leave_app: { args: void; result: void };
 }

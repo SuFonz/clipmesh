@@ -138,6 +138,7 @@ pub fn run() {
             commands::android_start_service,
             commands::android_stop_service,
             commands::android_service_running,
+            commands::android_notification_permission,
             commands::android_leave_app,
             commands::android_request_notification_permission,
             commands::android_push_clipboard,

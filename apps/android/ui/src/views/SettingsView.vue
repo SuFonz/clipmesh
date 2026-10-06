@@ -29,11 +29,40 @@ const toast = useToast();
 const serviceAvailable = ref(true);
 const serviceBusy = ref(false);
 
+/**
+ * 开关的显示值：后台常驻**此刻是否真的生效** = 通知权限已授予 且 前台服务在跑。
+ *
+ * 只绑通知权限的话，用户手动停掉服务后开关会自己弹回「开」；只绑服务的话，
+ * 权限被拒时它还可能显示「开」—— 两种都会让开关说谎。二者本来就该同步
+ * （granted ⇒ 服务在跑，denied ⇒ 服务停掉），所以「与」起来读到的就是真相。
+ */
+const serviceOn = ref(false);
+
 const mock = isMock();
+
+/**
+ * 读一次真实状态（通知权限 + 前台服务）。
+ *
+ * 显示状态只能走 `isNotificationPermissionGranted`（**不弹框**）；
+ * `requestNotificationPermission` 会弹系统对话框，只留给用户明确点击时用。
+ *
+ * 「权限没了但服务还在跑」是正常状态，不是要扳回来的不一致：Android 允许前台
+ * 服务在没有 POST_NOTIFICATIONS 时运行，只是常驻通知不显示。用户拒绝通知往往
+ * 只是嫌通知烦，不该顺带把后台同步一起关掉。开关显示「关」（它反映的是权限），
+ * 同步照常。
+ */
+async function syncServiceState(): Promise<void> {
+  const [granted, running] = await Promise.all([
+    androidApi.isNotificationPermissionGranted(),
+    androidApi.isServiceRunning(),
+  ]);
+  serviceOn.value = granted && running;
+  // 拒绝权限时不碰服务，见上面的说明。
+}
 
 onMounted(async () => {
   try {
-    await androidApi.isServiceRunning();
+    await syncServiceState();
   } catch (cause) {
     serviceAvailable.value = false;
     console.info("[clipmesh] Android 专属命令不可用：", toMessage(cause));
@@ -53,29 +82,47 @@ function onMaxImageBytes(event: Event): void {
   if (Number.isFinite(value)) void patch({ maxImageBytes: value });
 }
 
+/**
+ * 打开：先申请通知权限。没有它就没有常驻通知，也收不到远程剪贴板提醒，
+ * 所以被拒时**不启动服务**，开关自己回到「关」并说明原因。
+ * （权限其实已经授予时，这一步不会弹框 —— 只是把上次停掉的服务再拉起来。）
+ *
+ * 关闭：停掉服务。
+ */
 async function toggleService(value: boolean): Promise<void> {
   serviceBusy.value = true;
   try {
     if (value) {
-      // 打开常驻服务时顺带申请通知权限：少了它就没有常驻通知，也收不到远程
-      // 剪贴板提醒。被拒绝不算失败 —— 服务照常启动，只是安静地跑。
       const granted = await androidApi.requestNotificationPermission();
+      if (!granted) {
+        toast.warn(
+          "没有通知权限",
+          "后台同步照常，但没有常驻通知，也收不到远程剪贴板的提醒。可以在系统设置里重新允许通知。",
+        );
+        // 开关必须自己回到「关」—— 它反映的是权限，不是服务在不在跑。
+        await syncServiceState();
+        return;
+      }
+
       await androidApi.startService();
       await patch({ androidForegroundService: true });
-
-      if (granted) {
-        toast.success("前台服务已启动", "通知栏会显示常驻通知与「广播剪贴板」按钮。");
-      } else {
-        toast.warn("前台服务已启动", "通知权限被拒绝，后台收到内容时不会有提醒。");
-      }
+      serviceOn.value = true;
+      toast.success("前台服务已启动", "通知栏会显示常驻通知与「广播剪贴板」按钮。");
       return;
     }
 
     await androidApi.stopService();
     await patch({ androidForegroundService: false });
+    serviceOn.value = false;
     toast.success("前台服务已停止");
   } catch (cause) {
     toast.error("操作失败", toMessage(cause));
+    // 出错后以真实状态为准：开关绝不能停在「开」而服务其实没起来。
+    try {
+      await syncServiceState();
+    } catch {
+      serviceOn.value = false;
+    }
   } finally {
     serviceBusy.value = false;
   }
@@ -122,14 +169,16 @@ async function toggleService(value: boolean): Promise<void> {
 
     <AppCard v-if="serviceAvailable" title="后台常驻" icon="bell" subtitle="前台服务 + 通知">
       <AppToggle
-        :model-value="settingsStore.settings?.androidForegroundService ?? false"
+        :model-value="serviceOn"
         :disabled="serviceBusy"
         label="常驻前台服务"
         description="保持后台运行，通知栏会显示常驻通知与「广播剪贴板」按钮。"
         @update:model-value="toggleService"
       />
       <p class="cm-help mt-sm">
-        打开时会在 Android 13 及以上申请通知权限 —— 没有它就没有常驻通知，也收不到远程剪贴板提醒。
+        这个开关跟着通知权限走：权限被拒绝时它是关的，前台服务也会停掉 —— 没有通知权限就没有常驻通知，
+        也收不到远程剪贴板提醒。打开时会申请一次权限（系统里已经允许过就不再弹框）；
+        被拒绝的话再点一次可以重新申请。
       </p>
     </AppCard>
 

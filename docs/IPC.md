@@ -178,7 +178,8 @@ export interface IdentityView {
 | `android_start_service` | — | `void` | 启动前台服务 |
 | `android_stop_service` | — | `void` | 停止前台服务 |
 | `android_service_running` | — | `boolean` | |
-| `android_request_notification_permission` | — | `boolean` | Android 13+ 通知权限 |
+| `android_notification_permission` | — | `boolean` | 只**查询** Android 13+ 通知权限，不弹框 |
+| `android_request_notification_permission` | — | `boolean` | Android 13+ 通知权限，会弹系统对话框 |
 
 在非 Android 平台调用这些命令会抛出 `"android commands are only available on Android"`。
 

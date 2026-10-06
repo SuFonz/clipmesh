@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import app.cm.clipmesh.bridge.R
 import app.cm.clipmesh.bridge.broadcast.BroadcastActivity
 import app.cm.clipmesh.bridge.mainActivityClass
 
@@ -109,9 +110,13 @@ object ClipMeshNotifications {
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setContentTitle("ClipMesh is running")
             .setContentText(status)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            // Our own monochrome glyph. The template used
+            // `android.R.drawable.stat_sys_upload`, the system's up-arrow that
+            // means "a transfer is in progress" - so a notification that is
+            // permanently on screen looked like an upload that never finished.
+            .setSmallIcon(R.drawable.ic_clipmesh_status)
             .setContentIntent(launch)
-            .addAction(android.R.drawable.ic_menu_share, "Broadcast clipboard", broadcast)
+            .addAction(R.drawable.ic_clipmesh_status, "Broadcast clipboard", broadcast)
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -140,7 +145,7 @@ object ClipMeshNotifications {
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(preview),
             )
-            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setSmallIcon(R.drawable.ic_clipmesh_status)
             .setContentIntent(launch)
             .setAutoCancel(true)
             .build()

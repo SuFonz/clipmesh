@@ -27,6 +27,11 @@ const descriptionId = computed<string>(() => `${fieldId}-desc`);
 function onChange(event: Event): void {
   const target = event.target as HTMLInputElement;
   emit("update:modelValue", target.checked);
+  // 受控输入：父组件未必接受这次变化（例如通知权限被拒，开关必须留在「关」）。
+  // 父组件没有改值时不会重渲染，Vue 也就不会碰这个 DOM 属性，浏览器刚勾上的
+  // 选框会一直停在「开」。这里同步写回 prop；父组件接受时下一次 patch 会覆盖
+  // 成新值（Vue 的重渲染在微任务里，写在这里之后）。
+  target.checked = props.modelValue;
 }
 </script>
 

@@ -883,6 +883,9 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
     case "android_service_running":
       requireAndroid();
       return state.androidServiceRunning;
+    case "android_notification_permission":
+      requireAndroid();
+      return state.notificationPermission;
     case "android_request_notification_permission":
       requireAndroid();
       await sleep(280);
