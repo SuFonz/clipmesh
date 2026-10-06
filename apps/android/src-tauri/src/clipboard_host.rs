@@ -47,16 +47,19 @@ impl AndroidClipboardHost for KotlinClipboardHost {
     }
 
     fn show_received(&self, item: &ClipboardItem, source: &str) -> CoreResult<()> {
-        let (preview, is_image) = match item {
-            ClipboardItem::Text(payload) => (payload.preview(120), false),
-            ClipboardItem::Image(meta) => (
-                format!("Image {}x{} ({} KiB)", meta.width, meta.height, meta.size / 1024),
-                true,
-            ),
+        // Kept because the trait asks for it, but not the live path any more: the
+        // notification is posted by `crate::received`, which also needs the pixels
+        // of an image (for the preview and the share action) and therefore cannot
+        // go through a method that only takes metadata.
+        let preview = match item {
+            ClipboardItem::Text(payload) => payload.preview(120),
+            ClipboardItem::Image(meta) => {
+                format!("Image {}x{} ({} KiB)", meta.width, meta.height, meta.size / 1024)
+            }
         };
 
         self.bridge
-            .show_received(source, &preview, is_image)
+            .show_received(source, &preview)
             .map_err(platform_error)
     }
 

@@ -39,11 +39,13 @@
 # Keeping the class NAME matters as much as keeping the members: Jackson derives
 # a property's JSON key from the *name* of its setter or field (`setText` ->
 # "text"), so a renamed setter would silently stop matching the payload that
-# `apps/android/src-tauri/src/plugin.rs` serialises.
+# `apps/android/src-tauri/src/plugin.rs` serialises. Silently is the word to
+# watch here: Tauri's mapper has `FAIL_ON_UNKNOWN_PROPERTIES` disabled, so a
+# property that does not match does not throw - it stays at its default.
 #
 # `{ *; }` rather than a hand-written member list: adding a `var` to one of these
 # classes adds a payload field, and that must not need a second edit here to keep
-# working. The cost is three tiny classes R8 no longer shrinks.
+# working. The cost is a few tiny classes R8 no longer shrinks.
 #
 # A new `@Command` that takes arguments means adding its argument class below.
 #
@@ -59,6 +61,12 @@
 
 -keep class app.cm.clipmesh.bridge.ShowReceivedArgs { *; }
 
+-keep class app.cm.clipmesh.bridge.ShowReceivedImageArgs { *; }
+
+-keep class app.cm.clipmesh.bridge.ShareImageArgs { *; }
+
+-keep class app.cm.clipmesh.bridge.SetScreenshotSyncArgs { *; }
+
 # ---------------------------------------------------------------------------
 # The other reflective paths in this module, and why nothing is added for them
 # ---------------------------------------------------------------------------
@@ -70,9 +78,9 @@
 # (`-keep class app.cm.clipmesh.MainActivity { <init>(); }`) - confirmed against
 # a release build's mapping.txt, where it is one of the few app classes with no
 # rename target. The plugin's own manifest components (`BroadcastActivity`,
-# `ClipMeshService`, `BootReceiver`, `ClipboardActionReceiver`) are kept the same
-# way, and the `@Command` / `@PermissionCallback` methods - the other half of
-# Tauri's reflective entry points, since `PluginManager` finds them by annotation -
-# by `:tauri-android`'s own consumer rules, which the app's R8 configuration
-# carries as a "Local project :::tauri-android" section, with every one of them
-# listed in `seeds.txt`. The argument classes above were the only gap.
+# `ShareActivity`, `ClipMeshService`, `BootReceiver`, `ClipboardActionReceiver`)
+# are kept the same way, and the `@Command` / `@PermissionCallback` methods - the
+# other half of Tauri's reflective entry points, since `PluginManager` finds them
+# by annotation - by `:tauri-android`'s own consumer rules, which the app's R8
+# configuration carries as a "Local project :::tauri-android" section, with every
+# one of them listed in `seeds.txt`. The argument classes above were the only gap.

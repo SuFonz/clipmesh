@@ -16,6 +16,9 @@ import app.cm.clipmesh.bridge.clipboard.ClipboardAccess
 import app.cm.clipmesh.bridge.foregroundservice.BootReceiver
 import app.cm.clipmesh.bridge.foregroundservice.ClipMeshService
 import app.cm.clipmesh.bridge.notification.ClipMeshNotifications
+import app.cm.clipmesh.bridge.screenshot.MediaAccess
+import app.cm.clipmesh.bridge.screenshot.ScreenshotWatcher
+import app.cm.clipmesh.bridge.share.SharedImages
 import app.tauri.annotation.Command
 import app.tauri.annotation.Permission
 import app.tauri.annotation.PermissionCallback
@@ -36,6 +39,19 @@ import java.io.FileOutputStream
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
 
 /**
+ * Alias for the media-read permission the screenshot watcher needs, Android 13
+ * and later.
+ */
+private const val MEDIA_PERMISSION_ALIAS = "mediaImages"
+
+/**
+ * The same thing for Android 12 and below, where `READ_MEDIA_IMAGES` does not
+ * exist and asking for it would be answered "denied" without a dialog ever
+ * appearing.
+ */
+private const val LEGACY_MEDIA_PERMISSION_ALIAS = "mediaExternalStorage"
+
+/**
  * The Kotlin half of the ClipMesh Android plugin.
  *
  * The Rust half talks to this class through `PluginHandle::run_mobile_plugin`,
@@ -54,6 +70,14 @@ private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
         Permission(
             alias = NOTIFICATION_PERMISSION_ALIAS,
             strings = [Manifest.permission.POST_NOTIFICATIONS],
+        ),
+        Permission(
+            alias = MEDIA_PERMISSION_ALIAS,
+            strings = [Manifest.permission.READ_MEDIA_IMAGES],
+        ),
+        Permission(
+            alias = LEGACY_MEDIA_PERMISSION_ALIAS,
+            strings = [Manifest.permission.READ_EXTERNAL_STORAGE],
         ),
     ],
 )
@@ -167,7 +191,7 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
     // Notifications
     // -----------------------------------------------------------------------
 
-    /** Show the "you received something" notification. */
+    /** Show the "you received something" notification for text. */
     @Command
     fun showReceived(invoke: Invoke) {
         val args = invoke.parseArgs(ShowReceivedArgs::class.java)
@@ -179,10 +203,118 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
                 activity,
                 args.title ?: "Clipboard received",
                 args.preview.orEmpty(),
-                args.isImage,
+            ),
+        )
+
+        // A text that has just arrived is the newest thing there is, so the image
+        // notification it replaces is gone and so is the file behind its share
+        // action. Nothing else has to be undone: the preview *was* the
+        // notification.
+        SharedImages.dropReceived(activity)
+        invoke.resolve()
+    }
+
+    /**
+     * Show the "you received something" notification for an image.
+     *
+     * The PNG is staged under the FileProvider directory first, because a
+     * notification action cannot hand a chooser a `Bitmap` and Android refuses a
+     * `file://` path: the share action needs a `content://` URI, and that needs a
+     * file. The same bitmap becomes the notification's preview, so the image is
+     * decoded once.
+     */
+    @Command
+    fun showReceivedImage(invoke: Invoke) {
+        val args = invoke.parseArgs(ShowReceivedImageArgs::class.java)
+        val encoded = args.png
+        if (encoded == null) {
+            invoke.reject("no image was supplied")
+            return
+        }
+
+        // Decoded once into bytes: the bytes are what gets staged for sharing, and
+        // the bitmap is what the notification draws. Base64 is only ever a
+        // transport across the JNI boundary.
+        val png = try {
+            android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+        } catch (error: Exception) {
+            Log.w(TAG, "the plugin sent an image that is not base64", error)
+            invoke.reject("the image could not be decoded")
+            return
+        }
+
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+        if (bitmap == null) {
+            invoke.reject("the image could not be decoded")
+            return
+        }
+
+        val entryId = args.entryId ?: "unknown"
+
+        ClipMeshNotifications.ensureChannels(activity)
+        val staged = SharedImages.stageReceived(activity, entryId, png)
+        if (staged == null) {
+            invoke.reject("the image could not be staged for sharing")
+            return
+        }
+
+        ClipMeshNotifications.post(
+            activity,
+            ClipMeshNotifications.RECEIVED_NOTIFICATION_ID,
+            ClipMeshNotifications.receivedImageNotification(
+                activity,
+                args.title ?: "Clipboard received",
+                args.preview.orEmpty(),
+                bitmap,
+                staged,
             ),
         )
         invoke.resolve()
+    }
+
+    /**
+     * Hand an image to the share sheet.
+     *
+     * Used by the history list and the home page: the pixels come from Rust (the
+     * stored copy of a history entry), and land in the same FileProvider-backed
+     * cache directory the notification's share action reads from.
+     */
+    @Command
+    fun shareImage(invoke: Invoke) {
+        val args = invoke.parseArgs(ShareImageArgs::class.java)
+        val encoded = args.png
+        if (encoded == null) {
+            invoke.reject("no image was supplied")
+            return
+        }
+
+        val png = try {
+            android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+        } catch (error: Exception) {
+            Log.w(TAG, "the plugin sent an image that is not base64", error)
+            invoke.reject("the image could not be read")
+            return
+        }
+
+        // A received image is already staged under its own id, so sharing it
+        // again - from the home page - costs nothing.
+        val entryId = args.entryId ?: "unknown"
+        val staged = SharedImages.receivedIfStaged(activity, entryId)
+            ?: SharedImages.stageHistory(activity, entryId, png)
+        if (staged == null) {
+            invoke.reject("the image could not be staged for sharing")
+            return
+        }
+
+        onMain {
+            try {
+                activity.startActivity(SharedImages.chooserFor(activity, staged))
+                invoke.resolve()
+            } catch (error: Exception) {
+                Log.w(TAG, "could not open the share sheet", error)
+                invoke.reject("no app could share this image")
+            }
+        }
     }
 
     /**
@@ -240,6 +372,105 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
                 activity,
                 Manifest.permission.POST_NOTIFICATIONS,
             ) == PackageManager.PERMISSION_GRANTED
+
+    // -----------------------------------------------------------------------
+    // Screenshot sync
+    // -----------------------------------------------------------------------
+
+    /**
+     * Report whether the screenshot watcher may read this device's images, and
+     * whether it is watching.
+     *
+     * Queries only: it is what the settings switch is drawn from, and drawing a
+     * switch must not ask the user anything or start anything. `partial` is the
+     * Android 14 "selected photos only" grant, which cannot see the next
+     * screenshot - the screen has to say so rather than show a switch that mostly
+     * does nothing. `watching` is read from the watcher itself, so a permission
+     * revoked in the system settings makes the switch read off instead of lying.
+     */
+    @Command
+    fun screenshotPermission(invoke: Invoke) {
+        invoke.resolve(screenshotState(ScreenshotWatcher.isWatching))
+    }
+
+    /**
+     * Turn the screenshot watcher on or off.
+     *
+     * This is the only place a media permission is ever requested, and it is
+     * requested because the user just asked for the feature:
+     *
+     *  * `enabled = true, requestPermission = true` - the settings switch. The
+     *    permission is asked for if it is not held, and the watcher only starts
+     *    if it ends up granted.
+     *  * `enabled = true, requestPermission = false` - the Rust host restoring a
+     *    setting the user already agreed to, at startup. No dialog, ever: a second
+     *    startup prompt is exactly what the notification permission flow already
+     *    does once and must not be joined by another.
+     *  * `enabled = false` - unregister, and leave the permission alone. Android
+     *    permissions are the user's to revoke, not ours to tidy up.
+     */
+    @Command
+    fun setScreenshotSync(invoke: Invoke) {
+        val args = invoke.parseArgs(SetScreenshotSyncArgs::class.java)
+
+        if (!args.enabled) {
+            onMain {
+                ScreenshotWatcher.stop()
+                invoke.resolve(screenshotState(watching = false))
+            }
+            return
+        }
+
+        // Already allowed: nothing to ask, just start (or keep) watching. The
+        // answer is resolved from inside the block, because `onMain` may run it
+        // later - resolving first would report a watcher that has not started.
+        if (MediaAccess.granted(activity)) {
+            onMain {
+                ScreenshotWatcher.start(activity)
+                invoke.resolve(screenshotState(ScreenshotWatcher.isWatching))
+            }
+            return
+        }
+
+        if (!args.requestPermission) {
+            // The startup path. Nothing is asked; the observer simply does not
+            // start, and the settings screen reports the permission as missing.
+            invoke.resolve(screenshotState(watching = false))
+            return
+        }
+
+        val alias = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            MEDIA_PERMISSION_ALIAS
+        } else {
+            LEGACY_MEDIA_PERMISSION_ALIAS
+        }
+
+        requestPermissionForAlias(alias, invoke, "mediaPermissionResult")
+    }
+
+    /** Runs once the user has answered the media-read dialog. */
+    @PermissionCallback
+    fun mediaPermissionResult(invoke: Invoke) {
+        onMain {
+            // Only the full grant is enough: under Android 14's partial access
+            // the observer would see only the photos the user picked, and a
+            // watcher that quietly misses most screenshots is worse than one that
+            // says it cannot work.
+            val watching = MediaAccess.granted(activity) && ScreenshotWatcher.start(activity)
+            invoke.resolve(screenshotState(watching))
+        }
+    }
+
+    /**
+     * `{"granted": …, "partial": …, "watching": …}` - the one answer both the
+     * query and the toggle resolve, so the two cannot drift apart.
+     */
+    private fun screenshotState(watching: Boolean): JSObject =
+        JSObject().apply {
+            put("granted", MediaAccess.granted(activity))
+            put("partial", MediaAccess.partial(activity))
+            put("watching", watching)
+        }
 
     // -----------------------------------------------------------------------
     // Foreground service
@@ -334,6 +565,11 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
      * `serviceRunning` tells the poller whether the notification - the only
      * thing that can start a request - is still up.
      *
+     * `source` says which of the two producers deposited the payload: the
+     * notification's button (`clipboard`) or the screenshot watcher
+     * (`screenshot`). They go out the same way, but the two are not the same
+     * thing to the user, and only Kotlin knows which one this was.
+     *
      * A request is answered at most once: [BroadcastHandoff.take] clears it, so
      * a poll that runs twice cannot send twice.
      *
@@ -354,6 +590,13 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
 
             is BroadcastHandoff.Request.Read -> {
                 response.put("visible", false)
+                response.put("source", "clipboard")
+                response.put("payload", contentToJson(request.content))
+            }
+
+            is BroadcastHandoff.Request.Screenshot -> {
+                response.put("visible", false)
+                response.put("source", "screenshot")
                 response.put("payload", contentToJson(request.content))
             }
 
@@ -441,6 +684,18 @@ class ClipMeshPlugin(private val activity: Activity) : Plugin(activity) {
 // classes with mutable nullable properties. They deliberately do NOT extend
 // `JSObject`: that class is final, and it is the JSON *writer* used by
 // `resolve`, not something to model input with.
+//
+// Jackson derives each property's JSON key from the *name* of its setter, so the
+// names here have to match what `apps/android/src-tauri/src/plugin.rs`
+// serialises, camelCase for camelCase. `FAIL_ON_UNKNOWN_PROPERTIES` is off in
+// Tauri's mapper, so a field that is dropped from one side fails *silently* - the
+// property simply stays at its default.
+//
+// Note the Kotlin `is`-prefix rule, which is why there is no `isImage` here: a
+// `var isImage` generates `setImage`, and Jackson would look for `image`. A flag
+// in this position has to be named so that both sides agree; the received
+// notification needs no such flag at all, because text and image have their own
+// commands.
 
 /** Arguments for [ClipMeshPlugin.setText]. */
 class SetTextArgs {
@@ -457,6 +712,42 @@ class ShowReceivedArgs {
     var title: String? = null
 
     var preview: String? = null
+}
 
-    var isImage: Boolean = false
+/** Arguments for [ClipMeshPlugin.showReceivedImage]. */
+class ShowReceivedImageArgs {
+    /** History entry id, which names the staged file. */
+    var entryId: String? = null
+
+    var title: String? = null
+
+    var preview: String? = null
+
+    /** Base64 PNG, as everywhere else across the JNI boundary. */
+    var png: String? = null
+
+    var width: Int = 0
+
+    var height: Int = 0
+}
+
+/** Arguments for [ClipMeshPlugin.shareImage]. */
+class ShareImageArgs {
+    var entryId: String? = null
+
+    var png: String? = null
+}
+
+/** Arguments for [ClipMeshPlugin.setScreenshotSync]. */
+class SetScreenshotSyncArgs {
+    var enabled: Boolean = false
+
+    /**
+     * Whether an unheld permission may be asked for.
+     *
+     * The settings switch says yes; the Rust host restoring the setting at
+     * startup says no, so that starting the app never produces a permission
+     * dialog.
+     */
+    var requestPermission: Boolean = false
 }

@@ -52,6 +52,20 @@ object BroadcastHandoff {
             override val visible = false
         }
 
+        /**
+         * The screenshot watcher recognised a screenshot and read it.
+         *
+         * The same handoff as [Read] rather than one of its own: both are "some
+         * content the platform noticed, waiting for the host to broadcast it",
+         * and a second channel would only be a second thing to poll. They are
+         * still distinguishable, because the host has to report a failure
+         * differently - "the clipboard is empty" is not a useful thing to tell
+         * someone who just took a screenshot.
+         */
+        data class Screenshot(val content: ClipboardAccess.Content) : Request() {
+            override val visible = false
+        }
+
         /** ClipMesh was brought to the front; the read happens through it. */
         object Visible : Request() {
             override val visible = true

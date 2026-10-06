@@ -1,9 +1,9 @@
 //! User settings, persisted as `settings.json`.
 //!
 //! One struct serves both platforms. The desktop-only and Android-only fields
-//! (`start_minimized`, `android_foreground_service`) are simply ignored by the
-//! platform they do not apply to, which keeps a single settings file and a
-//! single IPC contract instead of two divergent ones.
+//! (`start_minimized`, `android_foreground_service`, `android_screenshot_sync`)
+//! are simply ignored by the platform they do not apply to, which keeps a single
+//! settings file and a single IPC contract instead of two divergent ones.
 
 use std::path::Path;
 
@@ -98,6 +98,12 @@ pub struct Settings {
     pub start_minimized: bool,
     /// Android: keep the foreground service running.
     pub android_foreground_service: bool,
+    /// Android: watch for screenshots and push them like a clipboard change.
+    ///
+    /// Off by default, and deliberately so: it is the only setting that makes
+    /// ClipMesh read the device's photo library on its own, which needs a media
+    /// permission and is nobody's idea of an obvious default.
+    pub android_screenshot_sync: bool,
     /// How many clipboard entries to keep.
     pub history_capacity: usize,
     /// Interface language: `system` follows the OS, otherwise an explicit tag.
@@ -114,6 +120,7 @@ impl Default for Settings {
             max_image_bytes: MAX_IMAGE_BYTES,
             start_minimized: false,
             android_foreground_service: true,
+            android_screenshot_sync: false,
             history_capacity: crate::sync::DEFAULT_HISTORY_CAPACITY,
             language: Language::System,
         }
@@ -181,6 +188,9 @@ impl Settings {
         if let Some(value) = patch.android_foreground_service {
             self.android_foreground_service = value;
         }
+        if let Some(value) = patch.android_screenshot_sync {
+            self.android_screenshot_sync = value;
+        }
         if let Some(value) = patch.history_capacity {
             self.history_capacity = value;
         }
@@ -246,6 +256,8 @@ pub struct SettingsPatch {
     pub start_minimized: Option<bool>,
     /// Android: keep the foreground service.
     pub android_foreground_service: Option<bool>,
+    /// Android: watch for screenshots and push them.
+    pub android_screenshot_sync: Option<bool>,
     /// New history capacity.
     pub history_capacity: Option<usize>,
     /// New interface language.
@@ -263,6 +275,7 @@ impl SettingsPatch {
             && self.max_image_bytes.is_none()
             && self.start_minimized.is_none()
             && self.android_foreground_service.is_none()
+            && self.android_screenshot_sync.is_none()
             && self.history_capacity.is_none()
             && self.language.is_none()
     }
@@ -277,9 +290,57 @@ mod tests {
         let settings = Settings::default();
         assert!(settings.auto_sync);
         assert!(settings.sync_text && settings.sync_images);
+        // The one setting that reads the photo library on its own: off.
+        assert!(!settings.android_screenshot_sync);
         assert!(settings.sync_policy().accepts(&clipmesh_protocol::ClipboardContent::Text(
             clipmesh_protocol::TextPayload::new_local("hi", clipmesh_protocol::DeviceId::new())
         )));
+    }
+
+    #[test]
+    fn screenshot_sync_is_opt_in_and_survives_a_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+
+        // Absent from the file => off, so a settings.json written before the
+        // feature existed cannot switch it on by accident.
+        std::fs::write(&path, r#"{"autoSync": true}"#).unwrap();
+        assert!(!Settings::load(&path).unwrap().android_screenshot_sync);
+
+        // A patch flips it, and the file carries it as a plain boolean.
+        let mut settings = Settings::load(&path).unwrap();
+        assert!(settings.apply(&SettingsPatch {
+            android_screenshot_sync: Some(true),
+            ..SettingsPatch::default()
+        }));
+        settings.save(&path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(r#""androidScreenshotSync": true"#), "unexpected file: {raw}");
+        assert!(Settings::load(&path).unwrap().android_screenshot_sync);
+    }
+
+    #[test]
+    fn a_screenshot_sync_patch_is_a_real_patch() {
+        let mut settings = Settings::default();
+
+        // Off -> off changes nothing, so no pointless disk write.
+        assert!(!settings.apply(&SettingsPatch {
+            android_screenshot_sync: Some(false),
+            ..SettingsPatch::default()
+        }));
+        assert!(!SettingsPatch {
+            android_screenshot_sync: Some(true),
+            ..SettingsPatch::default()
+        }
+        .is_empty());
+
+        assert!(settings.apply(&SettingsPatch {
+            android_screenshot_sync: Some(true),
+            ..SettingsPatch::default()
+        }));
+        assert!(settings.android_screenshot_sync);
+        assert!(settings.auto_sync, "other fields must be untouched");
     }
 
     #[test]

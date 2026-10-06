@@ -32,6 +32,7 @@ import type {
   PeerView,
   Platform,
   Result,
+  ScreenshotState,
   SendResult,
   SettingsView,
   StatusView,
@@ -81,9 +82,12 @@ export function configureMock(patch: Partial<MockConfig>): void {
     ...state.settings,
     deviceName: name,
     androidForegroundService: isAndroid,
+    // 截图同步要权限，切平台也不会自己变成「开」。
+    androidScreenshotSync: false,
   };
   state.androidServiceRunning = isAndroid;
   state.notificationPermission = isAndroid;
+  state.screenshotPermission = { granted: false, partial: false, watching: false };
 }
 
 /* ------------------------------------------------------------------ *
@@ -138,6 +142,8 @@ interface MockState {
   clipboard: string;
   androidServiceRunning: boolean;
   notificationPermission: boolean;
+  /** 截图同步的权限与监听状态（`partial` = Android 14 的「仅选中的照片」）。 */
+  screenshotPermission: ScreenshotState;
   /** 递增的假 UUID 计数器。 */
   seq: number;
 }
@@ -301,6 +307,7 @@ function initialState(): MockState {
       maxImageBytes: 8 * 1024 * 1024,
       startMinimized: false,
       androidForegroundService: platform === "android",
+      androidScreenshotSync: false,
       language: "system",
     },
     peers: samplePeers(),
@@ -310,6 +317,7 @@ function initialState(): MockState {
     clipboard: "",
     androidServiceRunning: platform === "android",
     notificationPermission: platform === "android",
+    screenshotPermission: { granted: false, partial: false, watching: false },
     seq: 0,
   };
 }
@@ -659,6 +667,9 @@ function patchOf(value: unknown): Partial<SettingsView> {
   if (typeof raw.androidForegroundService === "boolean") {
     patch.androidForegroundService = raw.androidForegroundService;
   }
+  if (typeof raw.androidScreenshotSync === "boolean") {
+    patch.androidScreenshotSync = raw.androidScreenshotSync;
+  }
   const language = languageOf(raw.language);
   if (language !== undefined) patch.language = language;
   return patch;
@@ -907,6 +918,30 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
       // 真机上会把应用退回后台 —— 浏览器里没有对应动作，静默成功即可。
       requireAndroid();
       return undefined;
+    case "android_screenshot_permission":
+      // 和真机一样：只查，不弹框、不启动任何东西。
+      requireAndroid();
+      return { ...state.screenshotPermission };
+    case "android_set_screenshot_sync": {
+      requireAndroid();
+      const enabled = bool(a.enabled, false);
+      if (!enabled) {
+        state.screenshotPermission = { ...state.screenshotPermission, watching: false };
+        state.settings = { ...state.settings, androidScreenshotSync: false };
+        return { ...state.screenshotPermission };
+      }
+      // 真机上这里会弹系统权限对话框；浏览器里直接当作用户同意了。
+      await sleep(280);
+      state.screenshotPermission = { granted: true, partial: false, watching: true };
+      state.settings = { ...state.settings, androidScreenshotSync: true };
+      return { ...state.screenshotPermission };
+    }
+    case "android_share_image": {
+      requireAndroid();
+      const item = state.history.find((i) => i.id === str(a.id));
+      if (!item || item.kind !== "image") throw new Error("there is no stored copy of that image");
+      return undefined;
+    }
   }
 }
 

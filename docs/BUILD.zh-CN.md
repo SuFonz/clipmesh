@@ -157,8 +157,9 @@ dependencies {
 
 插件的 `AndroidManifest.xml` 会通过 manifest merger 把权限
 （`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_DATA_SYNC`、`POST_NOTIFICATIONS`、
-`RECEIVE_BOOT_COMPLETED`、`CHANGE_WIFI_MULTICAST_STATE`）以及
-Service / Receiver 声明合并进应用。
+`RECEIVE_BOOT_COMPLETED`、`CHANGE_WIFI_MULTICAST_STATE`，以及截图同步用的
+`READ_MEDIA_IMAGES` / `READ_MEDIA_VISUAL_USER_SELECTED` / `READ_EXTERNAL_STORAGE`）
+以及 Service / Receiver / Activity / FileProvider 声明合并进应用。
 
 **③ 同一个文件 —— release 签名**
 
@@ -176,6 +177,15 @@ Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 r
 > **上面四处**都需要重新加上。这些是仅有的、需要手工维护的生成文件改动。
 > （`apps/android/plugins/bridge/consumer-rules.pro` 故意**不在**这份清单里：它是 R8 keep 规则而不是接线，
 > 位于 `gen/android` 之外的插件模块中，通过 `consumerProguardFiles` 生效 —— 见 §4.6。）
+>
+> **FileProvider 以前是这里的第五处，现在不是了。** 分享图片需要 `content://` URI，而
+> `androidx.core.content.FileProvider` 原先写在 `gen/android/app/src/main/AndroidManifest.xml` 里，
+> 路径表在 `gen/android/app/src/main/res/xml/file_paths.xml`。它现在搬进了插件自己的清单
+> （`apps/android/plugins/bridge/src/main/AndroidManifest.xml`，authority 同样是
+> `${applicationId}.fileprovider`，路径表是 `bridge/src/main/res/xml/clipmesh_file_paths.xml`），
+> 于是重新生成 `gen/android` 也不会把它弄丢，那份清单里只留下一段「不要再加回来」的注释 ——
+> 同一个 provider 声明两次会被 manifest merger 合并，而 `FILE_PROVIDER_PATHS` 的
+> `meta-data` 有两个不同取值时合并会**直接报错**，不是无害的重复。
 
 ### 4.4 运行与打包
 
@@ -225,6 +235,21 @@ Rust  engine.send_explicit(content)  → 对端
 变化”，引擎的 `handle_local_change` 会在 `autoSync` 关闭时把它丢掉 —— 而会手动按
 这个按钮的，正是这类用户。
 
+**截图同步走的是同一条路**（设置页的开关，默认关）：
+
+```
+MediaStore 变化
+  ↓  ScreenshotWatcher 的 ContentObserver（进程级、注册在 application context 上）
+  ↓  只认截图目录里的新图片（Pictures/Screenshots、DCIM/Screenshots 等）
+Kotlin 后台线程读图 → BroadcastHandoff.deposit(Request.Screenshot)
+  ↓  Rust broadcast::spawn 轮询 takeBroadcast（响应里 source = "screenshot"）
+Rust  engine.send_explicit(image)  → 对端，并写入历史
+```
+
+与剪贴板那条的唯一区别是**不写回剪贴板缓存**（`AndroidClipboardProvider::converted`
+而不是 `stage`）：截图本来就不在剪贴板上，缓存它会让之后一次后台读取把截图当成
+“你刚复制的东西”。
+
 Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运行时才报错）：
 
 | Rust (`plugin.rs`) | Kotlin (`ClipMeshPlugin.kt`) |
@@ -233,8 +258,12 @@ Rust ↔ Kotlin 的方法名一一对应，**改一边必须改另一边**（运
 | `setText` | `setText` |
 | `setImage` | `setImage` |
 | `showReceived` | `showReceived` |
+| `showReceivedImage` | `showReceivedImage` |
+| `shareImage` | `shareImage` |
 | `startService` / `stopService` / `serviceRunning` | 同名 |
 | `requestNotificationPermission` | `requestNotificationPermission` |
+| `screenshotPermission` | `screenshotPermission` |
+| `setScreenshotSync` | `setScreenshotSync` |
 | `leaveApp` | `leaveApp` |
 | `takeBroadcast` | `takeBroadcast` |
 
@@ -246,7 +275,8 @@ Kotlin 类名与包名在 `apps/android/src-tauri/src/plugin.rs` 的
 release 是开了压缩混淆的（`app/build.gradle.kts` 里的 `optimization { enable = true }`），而插件唯一依赖的
 反射路径 R8 看不见：`Invoke.parseArgs(SetTextArgs::class.java)` 用 **Jackson** 反序列化命令参数，靠的是运行时
 拿到的那个 class。在 keep 规则存在之前，release 会把它改名成 `d20` 并删掉构造函数和 setter，于是**所有带参数的
-`@Command`**（`setText`、`setImage`、`showReceived`）在运行时全部失败 —— 而不做混淆的 debug 构建一切正常：
+`@Command`**（`setText`、`setImage`、`showReceived`、`showReceivedImage`、`shareImage`、
+`setScreenshotSync`）在运行时全部失败 —— 而不做混淆的 debug 构建一切正常：
 
 ```
 Cannot construct instance of `d20` (no Creators, like default constructor, exist)

@@ -37,6 +37,10 @@ export const useSettingsStore = defineStore("settings", () => {
   const androidForegroundService = computed<boolean>(
     () => settings.value?.androidForegroundService ?? false,
   );
+  /** 截图同步：默认关，所以缺值时读到的是「关」。 */
+  const androidScreenshotSync = computed<boolean>(
+    () => settings.value?.androidScreenshotSync ?? false,
+  );
   const language = computed<LanguageSetting>(() => settings.value?.language ?? "system");
 
   /**
@@ -127,6 +131,7 @@ export const useSettingsStore = defineStore("settings", () => {
     maxImageBytes,
     startMinimized,
     androidForegroundService,
+    androidScreenshotSync,
     language,
     setSettings,
     refresh,

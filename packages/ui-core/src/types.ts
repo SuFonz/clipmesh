@@ -90,7 +90,18 @@ export interface SettingsView {
   maxImageBytes: number;
   startMinimized: boolean; // 桌面：启动即最小化到托盘
   androidForegroundService: boolean; // Android：常驻前台服务
+  androidScreenshotSync: boolean; // Android：监听截图并自动推送（默认关）
   language: LanguageSetting; // 不认识的值在 Rust 侧退化成 "system"
+}
+
+/** Android：截图同步的权限与监听状态（查询和开关返回同一个形状）。 */
+export interface ScreenshotState {
+  /** 完整权限（33+ 的 `READ_MEDIA_IMAGES`，32 及以下的 `READ_EXTERNAL_STORAGE`）。 */
+  granted: boolean;
+  /** 14+ 的「仅选中的照片」：观察者只能看到用户挑过的图片，截图基本看不到。 */
+  partial: boolean;
+  /** 观察者此刻是否已注册 —— 开关显示的就是它。 */
+  watching: boolean;
 }
 
 /** 发送结果。 */
@@ -159,6 +170,9 @@ export interface CommandMap {
   android_service_running: { args: void; result: boolean };
   android_notification_permission: { args: void; result: boolean };
   android_request_notification_permission: { args: void; result: boolean };
+  android_screenshot_permission: { args: void; result: ScreenshotState };
+  android_set_screenshot_sync: { args: { enabled: boolean }; result: ScreenshotState };
+  android_share_image: { args: { id: string }; result: void };
   android_leave_app: { args: void; result: void };
 }
 

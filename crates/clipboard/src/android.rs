@@ -177,6 +177,21 @@ impl AndroidClipboardProvider {
         Some(content)
     }
 
+    /// Turn platform content into protocol content **without** remembering it as
+    /// the current clipboard.
+    ///
+    /// The screenshot watcher's road. [`Self::stage`] also caches what it
+    /// converts, which is right for content that came off the clipboard and wrong
+    /// for an image that was never on it: after a screenshot, a background read
+    /// that falls back to the cache would report the screenshot as "what you
+    /// copied".
+    ///
+    /// Returns `None` for content ClipMesh does not carry.
+    #[must_use]
+    pub fn converted(&self, payload: PlatformClipboard) -> Option<ClipboardContent> {
+        self.convert(payload)
+    }
+
     /// Turn platform content into protocol content.
     fn convert(&self, payload: PlatformClipboard) -> Option<ClipboardContent> {
         match payload {
@@ -435,6 +450,25 @@ mod tests {
                 .stage(PlatformClipboard::Text(String::new()))
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn converting_leaves_the_cached_clipboard_alone() {
+        let (provider, host) = provider();
+        // Nothing readable: every `read` falls back to the cache, which is what
+        // makes the difference between the two methods observable.
+        host.refuse_reads
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        // A screenshot is content the platform noticed, not content the user
+        // copied - it must not become "what is on the clipboard".
+        let converted = provider.converted(PlatformClipboard::Image {
+            png: vec![0x89, b'P', b'N', b'G'],
+            width: 2,
+            height: 2,
+        });
+        assert!(matches!(converted, Some(ClipboardContent::Image(_))));
+        assert!(provider.read().await.unwrap().is_none());
     }
     #[tokio::test]
     async fn writing_goes_through_the_platform_host() {

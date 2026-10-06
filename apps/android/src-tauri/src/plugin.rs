@@ -145,15 +145,115 @@ impl<R: Runtime> NativeBridge<R> {
 
     /// Show the "clipboard received" notification.
     ///
+    /// A **text** notification, or the fallback shape for an image whose pixels
+    /// could not be read back: there is no preview bitmap and no share action,
+    /// and Kotlin drops whatever image it had staged for the previous one.
+    ///
+    /// There is no "this is an image" flag on the wire. The notification shows
+    /// the preview line either way, and the flag that used to sit here could not
+    /// have worked: Kotlin's `var isImage` generates `setImage`, so Jackson looked
+    /// for `image` and ignored what was sent.
+    ///
     /// # Errors
     /// Returns the JNI failure as a string.
-    pub fn show_received(&self, title: &str, preview: &str, is_image: bool) -> Result<(), String> {
+    pub fn show_received(&self, title: &str, preview: &str) -> Result<(), String> {
+        self.call("showReceived", ShowReceivedArgs { title, preview })
+    }
+
+    /// Show the "clipboard received" notification for an image.
+    ///
+    /// Kotlin stages the PNG in the cache directory it exposes through the
+    /// FileProvider, draws it as the notification's preview, and hangs a share
+    /// action on the notification. Base64 across the JNI boundary again - the
+    /// plugin API marshals JSON - and the notification is the one place where a
+    /// received image has to become a file before anything else can happen.
+    ///
+    /// `entry_id` names the staged file, so a second image cannot overwrite the
+    /// first one while a chooser still holds its URI.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn show_received_image(
+        &self,
+        entry_id: &str,
+        title: &str,
+        preview: &str,
+        png_base64: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
         self.call(
-            "showReceived",
-            ShowReceivedArgs {
+            "showReceivedImage",
+            ShowReceivedImageArgs {
+                entry_id,
                 title,
                 preview,
-                is_image,
+                png: png_base64,
+                width,
+                height,
+            },
+        )
+    }
+
+    /// Hand an image to Android's share sheet.
+    ///
+    /// The bytes are the stored copy of a history image: Kotlin writes them into
+    /// the FileProvider-backed cache directory and opens a chooser for the
+    /// resulting `content://` URI, so nothing ever sees a `file://` path.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn share_image(&self, entry_id: &str, png_base64: &str) -> Result<(), String> {
+        self.call(
+            "shareImage",
+            ShareImageArgs {
+                entry_id,
+                png: png_base64,
+            },
+        )
+    }
+
+    /// Whether the media-read permission the screenshot watcher needs is held.
+    ///
+    /// The query half of [`Self::set_screenshot_sync`], for the same reason
+    /// [`Self::notification_permission`] exists: the settings switch is
+    /// *displayed* from this answer, and displaying must not put a system dialog
+    /// in front of the user - nor, for that matter, start or stop anything. It
+    /// reports whether the observer is registered as well, because "the setting
+    /// says on" and "screenshots are actually being watched" are different
+    /// things.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn screenshot_permission(&self) -> Result<ScreenshotState, String> {
+        self.call("screenshotPermission", ())
+    }
+
+    /// Turn the screenshot watcher on or off.
+    ///
+    /// `request_permission` is what separates the two callers:
+    ///
+    ///  * the settings switch, which passes `true` - the user just asked for the
+    ///    feature, which is the only moment a media permission may be requested;
+    ///  * the host at startup, which passes `false` - it is restoring a setting
+    ///    the user already agreed to, and a system dialog on launch is exactly
+    ///    what "request permissions when they are needed" forbids.
+    ///
+    /// Registering only happens when the permission is actually held, so the
+    /// answer reports both the permission and whether anything is watching.
+    ///
+    /// # Errors
+    /// Returns the JNI failure as a string.
+    pub fn set_screenshot_sync(
+        &self,
+        enabled: bool,
+        request_permission: bool,
+    ) -> Result<ScreenshotState, String> {
+        self.call(
+            "setScreenshotSync",
+            SetScreenshotSyncArgs {
+                enabled,
+                request_permission,
             },
         )
     }
@@ -250,6 +350,36 @@ struct NotificationPermission {
     granted: bool,
 }
 
+/// Whether the screenshot watcher may read the device's images, and whether it
+/// is actually watching.
+///
+/// More than one boolean, because the states are not "yes/no":
+///
+///  * `granted` - the full grant (`READ_MEDIA_IMAGES` on 33+,
+///    `READ_EXTERNAL_STORAGE` below that). The whole library is readable.
+///  * `partial` - Android 14 lets the user hand over *some* photos instead of all
+///    of them. `READ_MEDIA_VISUAL_USER_SELECTED` is granted and the real media
+///    permission is denied, and `MediaStore` then answers with only the selected
+///    items. The watcher refuses to start in this state - it would look alive
+///    while missing most screenshots - and the settings screen says so instead of
+///    showing a switch that mostly does nothing.
+///  * `watching` - an observer is registered right now. Derived from the two
+///    above plus the setting, and reported rather than assumed, so a switch drawn
+///    from this answer cannot lie: a permission revoked in the system settings
+///    makes it read off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotState {
+    /// Whether the full media-read permission is held.
+    pub granted: bool,
+    /// Whether only the user-selected subset is readable (Android 14+).
+    #[serde(default)]
+    pub partial: bool,
+    /// Whether the observer is registered.
+    #[serde(default)]
+    pub watching: bool,
+}
+
 /// What Kotlin answers when asked whether the notification asked for a broadcast.
 ///
 /// `serviceRunning` is not about this request: the poller uses it to decide how
@@ -273,6 +403,38 @@ pub struct BroadcastPickup {
     /// Whether the foreground service is up.
     #[serde(default)]
     pub service_running: bool,
+    /// Where the payload came from: the notification action or the screenshot
+    /// watcher.
+    ///
+    /// They travel the same road - a process-wide handoff collected by the same
+    /// poll - but they are not the same thing to the user, so the log line and
+    /// the error a failed send produces have to say which one it was. Absent
+    /// means `clipboard`, which is also what every pre-screenshot Kotlin build
+    /// sends.
+    #[serde(default)]
+    pub source: PickupSource,
+}
+
+/// What put a payload in the handoff.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PickupSource {
+    /// The notification's "broadcast clipboard" action.
+    #[default]
+    Clipboard,
+    /// A screenshot the observer noticed.
+    Screenshot,
+}
+
+impl PickupSource {
+    /// How to name this source in a log line or an error.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Clipboard => "the clipboard",
+            Self::Screenshot => "the screenshot",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -290,7 +452,31 @@ struct SetImageArgs<'a> {
 struct ShowReceivedArgs<'a> {
     title: &'a str,
     preview: &'a str,
-    is_image: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowReceivedImageArgs<'a> {
+    entry_id: &'a str,
+    title: &'a str,
+    preview: &'a str,
+    png: &'a str,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShareImageArgs<'a> {
+    entry_id: &'a str,
+    png: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetScreenshotSyncArgs {
+    enabled: bool,
+    request_permission: bool,
 }
 
 /// Register the plugin.
@@ -395,6 +581,72 @@ mod tests {
         assert!(pickup.requested);
         assert!(pickup.visible);
         assert!(pickup.payload.is_none());
+    }
+
+    #[test]
+    fn a_pickup_says_whether_it_was_a_screenshot() {
+        // Both sources travel the same handoff; only this field tells them
+        // apart, and it decides the wording of the log and of a failed send.
+        let screenshot: BroadcastPickup = serde_json::from_str(
+            r#"{"requested":true,"serviceRunning":true,"source":"screenshot",
+                "payload":{"kind":"image","png":"","width":1,"height":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(screenshot.source, PickupSource::Screenshot);
+        assert_eq!(screenshot.source.describe(), "the screenshot");
+
+        let clipboard: BroadcastPickup = serde_json::from_str(
+            r#"{"requested":true,"serviceRunning":true,"source":"clipboard"}"#,
+        )
+        .unwrap();
+        assert_eq!(clipboard.source, PickupSource::Clipboard);
+
+        // Absent is the old Kotlin build's answer, and has to keep meaning
+        // "the notification button".
+        let old: BroadcastPickup =
+            serde_json::from_str(r#"{"requested":true,"serviceRunning":true}"#).unwrap();
+        assert_eq!(old.source, PickupSource::Clipboard);
+    }
+
+    #[test]
+    fn a_permission_answer_has_to_say_what_was_granted() {
+        // `{"granted": true}` without the flags is every answer from a build
+        // before Android 14 and before the observer state was reported, and must
+        // keep meaning "full access".
+        let full: ScreenshotState = serde_json::from_str(r#"{"granted":true}"#).unwrap();
+        assert!(full.granted);
+        assert!(!full.partial);
+        assert!(!full.watching);
+
+        let partial: ScreenshotState =
+            serde_json::from_str(r#"{"granted":false,"partial":true,"watching":false}"#).unwrap();
+        assert!(!partial.granted);
+        assert!(partial.partial);
+
+        assert!(
+            serde_json::from_str::<ScreenshotState>(r#"{"partial":true}"#).is_err(),
+            "a missing `granted` is a Kotlin/Rust contract break, not a default"
+        );
+    }
+
+    #[test]
+    fn a_screenshot_sync_answer_carries_the_permission_and_the_observer() {
+        let on: ScreenshotState =
+            serde_json::from_str(r#"{"granted":true,"partial":false,"watching":true}"#).unwrap();
+        assert_eq!(
+            on,
+            ScreenshotState {
+                granted: true,
+                partial: false,
+                watching: true,
+            }
+        );
+
+        // A denied request leaves the switch off and the observer unregistered.
+        let denied: ScreenshotState =
+            serde_json::from_str(r#"{"granted":false,"watching":false}"#).unwrap();
+        assert!(!denied.granted);
+        assert!(!denied.watching);
     }
 
     #[test]

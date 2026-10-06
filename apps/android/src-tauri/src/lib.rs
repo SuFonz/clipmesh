@@ -23,6 +23,7 @@ pub mod broadcast;
 pub mod clipboard_host;
 pub mod commands;
 pub mod plugin;
+pub mod received;
 
 use std::sync::{Arc, OnceLock};
 
@@ -30,6 +31,7 @@ use tauri::{Manager as _, Wry};
 
 use clipmesh_clipboard::AndroidClipboardProvider;
 use clipmesh_core::SharedSyncManager;
+use clipmesh_desktop_lib::images::ImageCache;
 use clipmesh_desktop_lib::state::{AppState, SetupError};
 use clipmesh_identity::IdentityPaths;
 
@@ -42,6 +44,11 @@ pub struct NativeState {
     pub clipboard: Arc<AndroidClipboardProvider>,
     /// The handle to the Kotlin plugin.
     pub bridge: Arc<NativeBridge<Wry>>,
+    /// The pixels behind history images.
+    ///
+    /// The same store the engine writes an image into, which is what lets a
+    /// history entry be shared without a second place to keep pixels.
+    pub images: Arc<ImageCache>,
 }
 
 /// Start the Android application.
@@ -80,6 +87,7 @@ pub fn run() {
             })?;
 
             let engine: SharedSyncManager = Arc::clone(&state.engine);
+            let images = Arc::clone(&state.images);
             app.manage(state);
 
             let clipboard = slot
@@ -103,11 +111,39 @@ pub fn run() {
             // behind the foreground service.
             let broadcast_bridge = Arc::clone(&bridge);
             let broadcast_clipboard = Arc::clone(&clipboard);
+            let received_bridge = Arc::clone(&bridge);
+            let received_images = Arc::clone(&images);
 
-            app.manage(NativeState { clipboard, bridge });
+            // Screenshot sync is restored from the setting, **not** re-asked:
+            // the permission belongs to the moment the user turns the switch on,
+            // so this call is told not to request anything. A permission that
+            // was revoked in the system settings since then simply leaves the
+            // observer unregistered, and the settings screen reports that.
+            if engine.settings().android_screenshot_sync {
+                match bridge.set_screenshot_sync(true, false) {
+                    Ok(state) if state.watching => {
+                        tracing::info!("the screenshot watcher is running");
+                    }
+                    Ok(state) => tracing::warn!(
+                        partial = state.partial,
+                        granted = state.granted,
+                        "screenshot sync is on but the media permission is not granted"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(%error, "could not start the screenshot watcher");
+                    }
+                }
+            }
+
+            app.manage(NativeState {
+                clipboard,
+                bridge,
+                images: Arc::clone(&images),
+            });
 
             clipmesh_desktop_lib::start_engine(handle, Arc::clone(&engine));
-            broadcast::spawn(broadcast_bridge, broadcast_clipboard, engine);
+            broadcast::spawn(broadcast_bridge, broadcast_clipboard, engine.clone());
+            received::spawn(received_bridge, engine, received_images);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -143,6 +179,9 @@ pub fn run() {
             commands::android_request_notification_permission,
             commands::android_push_clipboard,
             commands::android_report_error,
+            commands::android_screenshot_permission,
+            commands::android_set_screenshot_sync,
+            commands::android_share_image,
         ])
         .run(tauri::generate_context!())
         .expect("could not start ClipMesh on Android");

@@ -9,15 +9,19 @@ import {
   DeviceCard,
   EmptyState,
   FingerprintBadge,
+  androidApi,
   copyToClipboard,
   platformLabel,
   t,
   toMessage,
+  useHistoryStore,
   useIdentityStore,
   usePeersStore,
+  useRelativeTime,
   useSettingsStore,
   useStatusStore,
   useToast,
+  type ClipboardItemView,
 } from "@clipmesh/ui-core";
 
 /**
@@ -38,6 +42,7 @@ const statusStore = useStatusStore();
 const peersStore = usePeersStore();
 const settingsStore = useSettingsStore();
 const identityStore = useIdentityStore();
+const historyStore = useHistoryStore();
 const toast = useToast();
 
 const draftName = ref("");
@@ -46,6 +51,78 @@ const savingName = ref(false);
 const identity = computed(() => identityStore.identity);
 /** 只列已经建立 TLS 会话的设备 —— 这一块的标题就是「在线设备」。 */
 const onlinePeers = computed(() => peersStore.online);
+
+// ---------------------------------------------------------------------------
+// 最近一张图片
+// ---------------------------------------------------------------------------
+
+/**
+ * 首页那张预览图**不是单独存的状态**，而是历史列表的推论：最新一条是图片，就显示它。
+ *
+ * 这样一来「后来收到文本，预览和分享按钮要消失」根本不需要实现 —— 它只是最新一条
+ * 不再是图片的另一种说法。重启后自然也是对的：历史本来就是持久化的，没有第二份状态
+ * 可以和它不一致。
+ *
+ * 类型收窄到图片那一支，模板里才拿得到 `width` / `height`。
+ */
+type ImageItem = Extract<ClipboardItemView, { kind: "image" }>;
+
+const latestImage = computed<ImageItem | null>(() => {
+  const item = historyStore.latest;
+  return item !== null && item.kind === "image" ? item : null;
+});
+
+const latestThumbnail = computed<string | null>(() => {
+  const item = latestImage.value;
+  return item ? (historyStore.thumbnails[item.id] ?? null) : null;
+});
+
+const latestAlt = computed<string>(() => {
+  const item = latestImage.value;
+  return item
+    ? t("android.home.latestImage.alt", { width: item.width, height: item.height })
+    : "";
+});
+
+/**
+ * 预览复用历史页那一套缩略图（`get_image_thumbnail`），不另建一份取图逻辑。
+ * 历史 store 通常已经预取过这一条，`ensureThumbnail` 是幂等的；这里调用只是兜底 ——
+ * 预取失败或条目是从事件里乐观插入的，仍然能补上一张。
+ */
+watch(
+  latestImage,
+  (item) => {
+    if (item) void historyStore.ensureThumbnail(item);
+  },
+  { immediate: true },
+);
+
+const { format } = useRelativeTime();
+const latestSubtitle = computed<string>(() => {
+  const item = latestImage.value;
+  if (!item) return "";
+  return t("android.home.latestImage.subtitle", {
+    source: peersStore.nameOf(item.sourceDevice),
+    time: format(item.timestamp),
+  });
+});
+
+const sharing = ref(false);
+
+/** 分享：交给系统面板，URI 由原生侧用 FileProvider 生成。 */
+async function shareLatest(): Promise<void> {
+  const item = latestImage.value;
+  if (!item) return;
+
+  sharing.value = true;
+  try {
+    await androidApi.shareImage(item.id);
+  } catch (cause) {
+    toast.error(t("android.home.latestImage.shareFailed"), toMessage(cause));
+  } finally {
+    sharing.value = false;
+  }
+}
 
 watch(
   () => settingsStore.settings?.deviceName,
@@ -98,6 +175,48 @@ function exportCert(): void {
 <template>
   <div class="view">
     <div class="sections">
+      <!--
+        最近一张图片：只有历史里最新一条是图片时才存在。
+        它出现在这里而不是单独一张卡片，是因为它就是「最新一条」的另一种呈现 ——
+        后来收到（或发出）文本，这一块连同分享按钮一起消失，没有需要清理的状态。
+      -->
+      <section v-if="latestImage" class="sec">
+        <header class="sec-head">
+          <span class="sec-icon"><AppIcon name="image" :size="16" /></span>
+          <div class="sec-text">
+            <h2 class="sec-title">{{ t("android.home.latestImage.title") }}</h2>
+            <p class="sec-sub cm-truncate">{{ latestSubtitle }}</p>
+          </div>
+          <div class="sec-actions">
+            <RouterLink to="/history" class="link">{{ t("android.nav.history") }}</RouterLink>
+          </div>
+        </header>
+
+        <AppCard flush>
+          <div class="preview">
+            <img
+              v-if="latestThumbnail"
+              class="preview-image"
+              :src="latestThumbnail"
+              :alt="latestAlt"
+            />
+            <span v-else class="preview-placeholder">
+              <AppIcon name="image" :size="20" />
+            </span>
+
+            <AppButton
+              block
+              size="lg"
+              icon="share"
+              :loading="sharing"
+              @click="shareLatest"
+            >
+              {{ t("android.home.latestImage.share") }}
+            </AppButton>
+          </div>
+        </AppCard>
+      </section>
+
       <!-- 本机 -->
       <section class="sec">
         <header class="sec-head">
@@ -320,6 +439,35 @@ function exportCert(): void {
 .link {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* ---------- 最近一张图片 ---------- */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.preview-image {
+  display: block;
+  width: 100%;
+  max-height: 46vh;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  /* `contain`：预览要如实反映图片本身，裁掉一半的截图没有意义。 */
+  object-fit: contain;
+}
+
+.preview-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
 }
 
 /* ---------- 本机身份 ---------- */

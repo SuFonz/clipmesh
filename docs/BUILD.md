@@ -157,7 +157,9 @@ dependencies {
 
 The plugin's `AndroidManifest.xml` uses the manifest merger to merge its permissions
 (`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`,
-`RECEIVE_BOOT_COMPLETED`, `CHANGE_WIFI_MULTICAST_STATE`) and its Service / Receiver declarations into the app.
+`RECEIVE_BOOT_COMPLETED`, `CHANGE_WIFI_MULTICAST_STATE`, plus `READ_MEDIA_IMAGES` /
+`READ_MEDIA_VISUAL_USER_SELECTED` / `READ_EXTERNAL_STORAGE` for screenshot sync) and its
+Service / Receiver / Activity / FileProvider declarations into the app.
 
 **③ the same file — release signing**
 
@@ -177,6 +179,16 @@ bottom tab bar and the navigation bar.
 > (`apps/android/plugins/bridge/consumer-rules.pro` is deliberately **not** on the list: it contains R8 keep
 > rules rather than wiring, lives in the plugin module outside `gen/android`, and reaches the app through
 > `consumerProguardFiles` — see §4.6.)
+>
+> **The FileProvider used to be a fifth item here. It no longer is.** Sharing an image needs a `content://`
+> URI, and `androidx.core.content.FileProvider` used to be declared in
+> `gen/android/app/src/main/AndroidManifest.xml` with its paths in
+> `gen/android/app/src/main/res/xml/file_paths.xml`. It now lives in the plugin's own manifest
+> (`apps/android/plugins/bridge/src/main/AndroidManifest.xml`, same `${applicationId}.fileprovider`
+> authority, paths in `bridge/src/main/res/xml/clipmesh_file_paths.xml`), so regenerating `gen/android`
+> cannot lose it. All that is left in the generated manifest is a comment saying not to add it back:
+> declaring the same provider twice merges the two elements, and two different values for the
+> `FILE_PROVIDER_PATHS` meta-data make that merge **fail the build** rather than duplicate harmlessly.
 
 ### 4.4 Running and packaging
 
@@ -228,6 +240,21 @@ the app they came from.
 change", and the engine's `handle_local_change` drops it when `autoSync` is off — and that is exactly
 the user who would press this button by hand.
 
+**Screenshot sync travels the same road** (the settings switch, off by default):
+
+```
+A change in MediaStore
+  ↓  ScreenshotWatcher's ContentObserver (process-wide, registered on the application context)
+  ↓  only new images in a screenshot folder (Pictures/Screenshots, DCIM/Screenshots, …)
+Kotlin reads the image on a background thread → BroadcastHandoff.deposit(Request.Screenshot)
+  ↓  Rust broadcast::spawn polls takeBroadcast (the answer carries source = "screenshot")
+Rust  engine.send_explicit(image)  → peers, and into the history
+```
+
+The one difference from the clipboard road is that it does **not** write into the clipboard cache
+(`AndroidClipboardProvider::converted` rather than `stage`): a screenshot was never on the clipboard,
+and caching it would make a later background read report the screenshot as "what you just copied".
+
 Rust ↔ Kotlin method names correspond one-to-one, and **changing one side means changing the other** (it only errors at runtime):
 
 | Rust (`plugin.rs`) | Kotlin (`ClipMeshPlugin.kt`) |
@@ -236,8 +263,12 @@ Rust ↔ Kotlin method names correspond one-to-one, and **changing one side mean
 | `setText` | `setText` |
 | `setImage` | `setImage` |
 | `showReceived` | `showReceived` |
+| `showReceivedImage` | `showReceivedImage` |
+| `shareImage` | `shareImage` |
 | `startService` / `stopService` / `serviceRunning` | same names |
 | `requestNotificationPermission` | `requestNotificationPermission` |
+| `screenshotPermission` | `screenshotPermission` |
+| `setScreenshotSync` | `setScreenshotSync` |
 | `leaveApp` | `leaveApp` |
 | `takeBroadcast` | `takeBroadcast` |
 
@@ -250,8 +281,8 @@ Release is minified (`optimization { enable = true }` in `app/build.gradle.kts`)
 reflective path the plugin depends on: `Invoke.parseArgs(SetTextArgs::class.java)` deserialises a command's
 payload with **Jackson**, over the class object it is handed. Before the keep rules existed a release build
 renamed `SetTextArgs` to `d20` and stripped its constructor and setters, so **every `@Command` that takes
-arguments** (`setText`, `setImage`, `showReceived`) failed at runtime — while the debug build, which does not
-minify, worked:
+arguments** (`setText`, `setImage`, `showReceived`, `showReceivedImage`, `shareImage`, `setScreenshotSync`)
+failed at runtime — while the debug build, which does not minify, worked:
 
 ```
 Cannot construct instance of `d20` (no Creators, like default constructor, exist)

@@ -65,6 +65,19 @@ export const android = {
     en: "Make sure the other device is running ClipMesh and is on the same network.",
   },
 
+  /* --- 首页：最近一张收到/发出的图片 --- */
+  "android.home.latestImage.title": { "zh-CN": "最近一张图片", en: "Latest image" },
+  "android.home.latestImage.subtitle": {
+    "zh-CN": "来自 {source} · {time}",
+    en: "From {source} · {time}",
+  },
+  "android.home.latestImage.alt": {
+    "zh-CN": "最近一张剪贴板图片 {width}×{height}",
+    en: "Latest clipboard image {width}×{height}",
+  },
+  "android.home.latestImage.share": { "zh-CN": "分享这张图片", en: "Share this image" },
+  "android.home.latestImage.shareFailed": { "zh-CN": "分享失败", en: "Could not share" },
+
   /* --- 设备页 --- */
   "android.devices.discoveredCount": { "zh-CN": "发现 {count}", en: "Discovered {count}" },
   "android.devices.incoming.title": { "zh-CN": "配对请求", en: "Pairing requests" },
@@ -151,6 +164,8 @@ export const android = {
   "android.history.confirm.confirm": { "zh-CN": "清空", en: "Clear" },
 
   "android.history.toast.copied": { "zh-CN": "已复制到剪贴板", en: "Copied to the clipboard" },
+  "android.history.toast.shared": { "zh-CN": "已打开分享面板", en: "Share sheet opened" },
+  "android.history.toast.shareFailed": { "zh-CN": "分享失败", en: "Could not share" },
   "android.history.toast.resent": {
     "zh-CN": "已重发（{count} 台设备）",
     en: "Resent to {count} devices",

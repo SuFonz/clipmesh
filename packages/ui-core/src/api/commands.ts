@@ -11,6 +11,7 @@ import type {
   IdentityView,
   PairingPrompt,
   PeerView,
+  ScreenshotState,
   SendResult,
   SettingsView,
   StatusView,
@@ -153,6 +154,38 @@ export function androidRequestNotificationPermission(): Promise<boolean> {
 }
 
 /**
+ * 查询截图同步的权限与监听状态（**不弹框、不启动任何东西**）。
+ *
+ * 与 `androidSetScreenshotSync` 的分工和通知权限那一对完全一样：显示状态走这里，
+ * 申请权限只在用户拨开关时发生。返回里的 `watching` 才是开关应该显示的值 ——
+ * 系统设置里把权限撤掉之后，配置文件里仍是「开」，但观察者并没有在跑。
+ */
+export function androidScreenshotPermission(): Promise<ScreenshotState> {
+  return call("android_screenshot_permission");
+}
+
+/**
+ * 打开/关闭截图监听。**这里是唯一会申请媒体权限的地方。**
+ *
+ * 打开时先申请权限（已授予就不再弹框），只有拿到完整权限才会注册观察者：部分授权
+ * （Android 14 的「仅选中的照片」）下监听会漏掉绝大多数截图，与其装作能用，不如如实
+ * 报告。关闭时只注销观察者，权限仍归用户在系统里管理。
+ */
+export function androidSetScreenshotSync(enabled: boolean): Promise<ScreenshotState> {
+  return call("android_set_screenshot_sync", { enabled });
+}
+
+/**
+ * 用系统分享面板分享一张历史图片。
+ *
+ * 像素由 Rust 从本机保存的那份读出来，Kotlin 写进 FileProvider 目录后发
+ * `ACTION_SEND` —— 全程 `content://`，不会把 `file://` 路径交给别的应用。
+ */
+export function androidShareImage(id: string): Promise<void> {
+  return call("android_share_image", { id });
+}
+
+/**
  * 把应用退回后台。
  *
  * 通知栏那颗「广播剪贴板」默认走透明 Activity，不显示任何界面；只有它读不到剪贴板
@@ -189,5 +222,8 @@ export const androidApi = {
   isServiceRunning: androidServiceRunning,
   isNotificationPermissionGranted: androidNotificationPermission,
   requestNotificationPermission: androidRequestNotificationPermission,
+  screenshotPermission: androidScreenshotPermission,
+  setScreenshotSync: androidSetScreenshotSync,
+  shareImage: androidShareImage,
   leaveApp: androidLeaveApp,
 } as const;

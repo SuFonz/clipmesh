@@ -7,9 +7,12 @@
 
 use tauri::State;
 
-use clipmesh_clipboard::PlatformClipboard;
+use base64::Engine as _;
 
-use crate::plugin::ClipboardPayload;
+use clipmesh_clipboard::PlatformClipboard;
+use clipmesh_core::ImageStore as _;
+
+use crate::plugin::{ClipboardPayload, ScreenshotState};
 use crate::NativeState;
 
 /// Shorthand for a command result.
@@ -111,6 +114,65 @@ pub async fn android_push_clipboard(
 pub async fn android_report_error(state: State<'_, NativeState>, message: String) -> Ipc<()> {
     state.clipboard.push_error(message);
     Ok(())
+}
+
+/// Whether the screenshot watcher may read this device's images, and whether it
+/// is watching.
+///
+/// **Queries only** - no dialog, and no side effects. The settings switch is
+/// drawn from this answer, and drawing a switch must not ask the user anything
+/// or start anything.
+#[tauri::command]
+pub async fn android_screenshot_permission(state: State<'_, NativeState>) -> Ipc<ScreenshotState> {
+    let bridge = state.bridge.clone();
+    bridge
+        .screenshot_permission()
+        .map_err(|error| fail(format!("could not read the permission: {error}")))
+}
+
+/// Turn screenshot sync on or off.
+///
+/// `enabled` is the user's decision, and the permission is requested right here
+/// when it is `true`: there is no way to read an image out of `MediaStore`
+/// without it, and asking at any other moment would be a permission prompt the
+/// user did not ask for. The answer carries the permission *and* whether the
+/// observer ended up registered, so a UI cannot show a switch that lies.
+#[tauri::command]
+pub async fn android_set_screenshot_sync(
+    state: State<'_, NativeState>,
+    enabled: bool,
+) -> Ipc<ScreenshotState> {
+    let bridge = state.bridge.clone();
+    bridge
+        .set_screenshot_sync(enabled, true)
+        .map_err(|error| fail(format!("could not change screenshot sync: {error}")))
+}
+
+/// Hand a history image to Android's share sheet.
+///
+/// The pixels come from the stored `<state>/images/<id>.png` copy - the same one
+/// the history thumbnails are served from - so an entry can be shared long after
+/// the clipboard has moved on. `entry_id` names the staged file Kotlin writes,
+/// which is what keeps a second share from overwriting a URI a chooser still
+/// holds.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn android_share_image(state: State<'_, NativeState>, id: String) -> Ipc<()> {
+    let bridge = state.bridge.clone();
+    let images = std::sync::Arc::clone(&state.images);
+    let entry_id = id.clone();
+
+    // Reading a multi-megabyte PNG and base64-encoding it is not work for the
+    // runtime's worker threads - the same rule `get_image_thumbnail` follows.
+    let encoded = tokio::task::spawn_blocking(move || match images.get(&id) {
+        Some(png) => Ok(base64::engine::general_purpose::STANDARD.encode(png)),
+        None => Err("there is no stored copy of that image".to_owned()),
+    })
+    .await
+    .map_err(|error| fail(format!("the share task panicked: {error}")))??;
+
+    bridge
+        .share_image(&entry_id, &encoded)
+        .map_err(|error| fail(format!("could not share the image: {error}")))
 }
 
 #[cfg(test)]

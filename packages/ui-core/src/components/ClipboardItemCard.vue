@@ -11,6 +11,10 @@ import AppIcon from "./AppIcon.vue";
 /**
  * 一条剪贴板历史：文本显示预览（可展开），图片显示本地缩略图 + 尺寸/大小。
  * 操作按钮只 **emit 事件**，具体调用哪个命令由视图决定。
+ *
+ * 图片那一栏的动作可以由视图换掉：Android 上「复制」对一张图没什么用（系统剪贴板
+ * 收得下图片，但用户想做的通常是发给别人），所以那边传 `image-action="share"`，
+ * 按钮变成「分享」。默认仍是复制 —— 桌面端什么都不用传，行为和以前一模一样。
  */
 const props = withDefaults(
   defineProps<{
@@ -19,7 +23,7 @@ const props = withDefaults(
     sourceName?: string;
     /** 图片缩略图 data URL；没加载好就显示占位。 */
     thumbnail?: string | null;
-    /** 正在执行 copy / resend。 */
+    /** 正在执行 copy / resend / share。 */
     busy?: boolean;
     /** 刚收到，闪一下。 */
     highlight?: boolean;
@@ -27,6 +31,11 @@ const props = withDefaults(
     compact?: boolean;
     /** 隐藏操作按钮（只读预览场景）。 */
     hideActions?: boolean;
+    /**
+     * 图片条目上的动作：`copy`（默认，两个平台原先的行为）或 `share`
+     * （Android：交给系统分享面板）。文本条目永远是复制。
+     */
+    imageAction?: "copy" | "share";
   }>(),
   {
     sourceName: undefined,
@@ -35,18 +44,22 @@ const props = withDefaults(
     highlight: false,
     compact: false,
     hideActions: false,
+    imageAction: "copy",
   },
 );
 
 const emit = defineEmits<{
   (e: "copy", item: ClipboardItemView): void;
   (e: "resend", item: ClipboardItemView): void;
+  (e: "share", item: ClipboardItemView): void;
 }>();
 
 const { format } = useRelativeTime();
 const expanded = ref(false);
 
 const isText = computed<boolean>(() => props.item.kind === "text");
+/** 图片条目显示「分享」而不是「复制」。 */
+const sharesImage = computed<boolean>(() => !isText.value && props.imageAction === "share");
 const textContent = computed<string>(() => (props.item.kind === "text" ? props.item.content : ""));
 const needsExpand = computed<boolean>(
   () => textContent.value.length > 220 || textContent.value.split("\n").length > 3,
@@ -111,6 +124,18 @@ const time = computed<string>(() => format(props.item.timestamp));
 
     <footer v-if="!hideActions" class="foot">
       <AppButton
+        v-if="sharesImage"
+        size="sm"
+        variant="ghost"
+        icon="share"
+        :disabled="busy"
+        :title="t('components.clipboardItem.shareTitle')"
+        @click="emit('share', item)"
+      >
+        {{ t("components.clipboardItem.share") }}
+      </AppButton>
+      <AppButton
+        v-else
         size="sm"
         variant="ghost"
         icon="copy"

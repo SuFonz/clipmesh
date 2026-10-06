@@ -122,6 +122,52 @@ export const settings = {
     en: "Foreground service stopped",
   },
 
+  /* --- Android：截图同步 --- */
+  "settings.screenshot.title": { "zh-CN": "截图同步", en: "Screenshot sync" },
+  "settings.screenshot.subtitle": {
+    "zh-CN": "截图后自动广播（默认关）",
+    en: "Broadcast screenshots automatically (off by default)",
+  },
+  "settings.screenshot.label": { "zh-CN": "截图后自动广播", en: "Broadcast screenshots" },
+  "settings.screenshot.description": {
+    "zh-CN": "侦测到新截图时，把截图本身推给已信任设备并写入历史。",
+    en: "When a screenshot is taken, push the image itself to your trusted devices and save it to history.",
+  },
+  "settings.screenshot.help": {
+    "zh-CN":
+      "打开时会申请读取照片权限（Android 13 及以上是「照片和视频」，12 及以下是「存储」）—— 没有它就读不到截图内容，功能无法工作。只认系统截图目录里的新图片，不会碰相册里的其他照片；相机拍的照片不会同步。关掉开关即停止监听，权限仍归系统设置管理。",
+    en: "Turning this on asks for photo access (Photos and videos on Android 13+, Storage on 12 and below) — without it the screenshot itself cannot be read, so the feature cannot work. Only new images in the system's screenshot folders are picked up; the rest of your gallery, including anything the camera saved, is left alone. Turning the switch off stops the watcher; the permission stays yours to manage in system settings.",
+  },
+  "settings.screenshot.noPermission.title": {
+    "zh-CN": "没有读取照片的权限",
+    en: "No photo access",
+  },
+  "settings.screenshot.noPermission.description": {
+    "zh-CN": "截图同步需要读取截图的权限，已被拒绝。可以在系统设置里允许后再打开这个开关。",
+    en: "Screenshot sync needs to read the screenshot, and access was denied. Allow it in system settings, then turn the switch on again.",
+  },
+  "settings.screenshot.partial.title": {
+    "zh-CN": "只允许了部分照片",
+    en: "Only some photos allowed",
+  },
+  "settings.screenshot.partial.description": {
+    "zh-CN":
+      "系统目前只把「选中的照片」交给 ClipMesh，新截的图不在里面，所以监听无法工作。请在系统设置的权限里改成「允许全部」，再打开这个开关。",
+    en: "Android is only handing ClipMesh the photos you selected, which will not include the next screenshot, so the watcher cannot work. Change the permission to \"Allow all\" in system settings, then turn the switch on again.",
+  },
+  "settings.screenshot.started.title": {
+    "zh-CN": "开始监听截图",
+    en: "Watching for screenshots",
+  },
+  "settings.screenshot.started.description": {
+    "zh-CN": "之后新截的图会自动广播到在线设备。",
+    en: "New screenshots will be broadcast to your online devices.",
+  },
+  "settings.screenshot.stopped": {
+    "zh-CN": "已停止监听截图",
+    en: "Stopped watching for screenshots",
+  },
+
   /* --- Android「关于」卡片 --- */
   "settings.about.title": { "zh-CN": "关于", en: "About" },
   "settings.about.mock": { "zh-CN": "浏览器 MOCK", en: "Browser MOCK" },

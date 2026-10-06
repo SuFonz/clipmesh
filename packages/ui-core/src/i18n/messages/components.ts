@@ -32,6 +32,11 @@ export const components = {
     en: "Copy to this device's clipboard (does not send)",
   },
   "components.clipboardItem.copy": { "zh-CN": "复制", en: "Copy" },
+  "components.clipboardItem.shareTitle": {
+    "zh-CN": "用系统分享面板发给其他应用",
+    en: "Share with another app through the system share sheet",
+  },
+  "components.clipboardItem.share": { "zh-CN": "分享", en: "Share" },
   "components.clipboardItem.resendTitle": {
     "zh-CN": "重新发送到所有在线设备",
     en: "Send again to every online device",

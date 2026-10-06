@@ -109,6 +109,7 @@ export interface SettingsView {
   maxImageBytes: number;
   startMinimized: boolean;    // desktop: start minimized to the tray
   androidForegroundService: boolean; // Android: keep the foreground service running
+  androidScreenshotSync: boolean;    // Android: broadcast screenshots (opt-in, false by default)
   historyCapacity: number;    // how many clipboard entries to keep (1..=500, 50 by default)
   language: LanguageSetting;  // unknown values degrade to "system" on the Rust side
 }
@@ -191,6 +192,23 @@ export interface IdentityView {
 | `android_leave_app` | — | `void` | Send the app to the back of the task stack after a visible broadcast; the Rust host does the same on its own fallback path, and this is the command for a UI that wants to leave on purpose |
 | `android_push_clipboard` | `{ payload: { kind: "text", text: string } \| { kind: "image", png: string, width: number, height: number } \| { kind: "empty" } }` | `void` | Record clipboard content Kotlin read: it reports a **change**, not an explicit send, so the engine drops it while `autoSync` is off. No caller in the UI today |
 | `android_report_error` | `{ message: string }` | `void` | Report a platform failure so it reaches the UI as a normal `clipmesh://error` event |
+| `android_screenshot_permission` | — | `ScreenshotState` | Only **queries** the media-read permission and whether the screenshot watcher is registered; no dialog, and nothing is started or stopped |
+| `android_set_screenshot_sync` | `{ enabled: boolean }` | `ScreenshotState` | Turn the watcher on or off. **The only place the media permission is ever requested** (`READ_MEDIA_IMAGES` on 33+, `READ_EXTERNAL_STORAGE` on 32 and below), and only when enabling; the observer starts only if the full grant is held |
+| `android_share_image` | `{ id: string }` | `void` | Open Android's share sheet for a history image. The pixels come from the same `<state>/images/<id>.png` copy `get_image_thumbnail` reads, and Kotlin stages them under the FileProvider — a `content://` URI, never a `file://` path |
+
+```ts
+/** Android: the screenshot watcher's permission and registration state. */
+export interface ScreenshotState {
+  granted: boolean;   // the full READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE grant
+  partial: boolean;   // Android 14+: only the user's selected photos are readable
+  watching: boolean;  // an observer is registered right now — what the switch shows
+}
+```
+
+> `watching` is what the settings switch displays, not `settings.androidScreenshotSync`: a permission
+> revoked in the system settings leaves the setting reading "on" while nothing is being watched.
+> Under `partial` the watcher deliberately does not start — `MediaStore` would answer with only the
+> selected images, so it would look alive while missing most screenshots.
 
 These commands exist only in the Android build. The desktop build registers stubs for `android_start_service`,
 `android_stop_service`, `android_service_running` and `android_request_notification_permission`, which throw
@@ -213,6 +231,27 @@ The frontend only has to mount `useCoreEvents()` once in `App.vue`; it writes ev
 | `clipmesh://clipboard-received` | `ClipboardItemView` | A remote clipboard item arrived and was written locally |
 | `clipmesh://clipboard-sent` | `{ item: ClipboardItemView, delivered: number }` | Local content was pushed |
 | `clipmesh://error` | `string` | A non-fatal error, for a toast |
+
+### Receiving on Android
+
+The engine writes **received text straight onto the clipboard** (`accept_remote` → `ClipboardProvider::write`).
+Android 10's restriction is on background clipboard *reads*, not writes, so this works with the app in the
+background; a write that genuinely fails is reported as a `clipmesh://error` *and* still produces the
+notification below, because the item is recorded in the history either way.
+
+The notification is posted by the Android host (`apps/android/src-tauri/src/received.rs`), which subscribes to
+the same event stream the webview does:
+
+| Received | Notification | Home page |
+| --- | --- | --- |
+| text | title, preview line, tap to open the app | no preview |
+| image | the image itself as a preview, **plus a share action** | the image, plus a share button |
+
+The home page's preview is **derived**, not stored: it is the newest history entry, shown only while that entry
+is an image. So when text arrives afterwards, the preview and its share button are gone because the newest entry
+is no longer an image — there is no second piece of state to keep in step, and nothing to invalidate across a
+restart. The notification behaves the same way for a different reason: text and image share one notification id,
+so posting the text notification *replaces* the image preview and its action.
 
 ---
 

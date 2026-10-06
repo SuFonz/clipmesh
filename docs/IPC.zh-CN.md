@@ -109,6 +109,7 @@ export interface SettingsView {
   maxImageBytes: number;
   startMinimized: boolean;    // 桌面：启动即最小化到托盘
   androidForegroundService: boolean; // Android：常驻前台服务
+  androidScreenshotSync: boolean;    // Android：截图后自动广播（默认关，需读取照片权限）
   historyCapacity: number;    // 保留多少条剪贴板记录（1..=500，默认 50）
   language: LanguageSetting;  // 不认识的值在 Rust 侧退化成 "system"
 }
@@ -191,6 +192,22 @@ export interface IdentityView {
 | `android_leave_app` | — | `void` | 在界面可见的广播之后把 app 退到任务栈后面；Rust 宿主自己的兜底路径也会这么做，这条命令是给「想主动退到后台」的界面用的 |
 | `android_push_clipboard` | `{ payload: { kind: "text", text: string } \| { kind: "image", png: string, width: number, height: number } \| { kind: "empty" } }` | `void` | 上报 Kotlin 读到的剪贴板内容：它报告的是**变化**，不是显式发送，所以 `autoSync` 关着时引擎会丢弃。目前界面里没有调用方 |
 | `android_report_error` | `{ message: string }` | `void` | 上报平台侧故障，让它以普通的 `clipmesh://error` 事件到达界面 |
+| `android_screenshot_permission` | — | `ScreenshotState` | 只**查询**读取照片的权限，以及截图监听是否已注册；不弹框，也不启动/停止任何东西 |
+| `android_set_screenshot_sync` | `{ enabled: boolean }` | `ScreenshotState` | 打开/关闭截图监听。**这里是唯一会申请媒体权限的地方**（33+ 是 `READ_MEDIA_IMAGES`，32 及以下是 `READ_EXTERNAL_STORAGE`），而且只在打开时申请；只有拿到完整权限才会注册观察者 |
+| `android_share_image` | `{ id: string }` | `void` | 对一条历史图片打开系统分享面板。像素来自 `get_image_thumbnail` 读的同一份 `<state>/images/<id>.png`，Kotlin 把它暂存到 FileProvider 下 —— 发出去的是 `content://`，绝不是 `file://` |
+
+```ts
+/** Android：截图监听的权限与注册状态。 */
+export interface ScreenshotState {
+  granted: boolean;   // 完整权限：READ_MEDIA_IMAGES（33+）/ READ_EXTERNAL_STORAGE（≤32）
+  partial: boolean;   // Android 14+：只允许了「选中的照片」
+  watching: boolean;  // 观察者此刻是否已注册 —— 开关显示的就是它
+}
+```
+
+> 设置页的开关显示的是 `watching`，不是 `settings.androidScreenshotSync`：在系统设置里把权限撤掉之后，
+> 配置文件里仍然是「开」，但没有任何东西在监听。`partial` 时监听**故意不启动** —— `MediaStore` 那时只
+> 会交出用户挑过的图片，监听看起来活着，实际上漏掉绝大多数截图。
 
 这些命令只存在于 Android 构建里。桌面构建为 `android_start_service`、`android_stop_service`、
 `android_service_running` 和 `android_request_notification_permission` 注册了桩函数，调用会抛
@@ -213,6 +230,24 @@ Tauri 的 "command not found" 失败。
 | `clipmesh://clipboard-received` | `ClipboardItemView` | 收到远端剪贴板并已写入本机 |
 | `clipmesh://clipboard-sent` | `{ item: ClipboardItemView, delivered: number }` | 本地内容已推送 |
 | `clipmesh://error` | `string` | 非致命错误，用于 toast |
+
+### Android 端「收到」之后
+
+引擎把**收到的文本直接写进剪贴板**（`accept_remote` → `ClipboardProvider::write`）。Android 10 限制的是后台
+**读**剪贴板，不是写，所以应用在后台也能生效；真的写失败时会报一条 `clipmesh://error`，同时仍然弹出下面这条
+通知 —— 无论写没写成，条目都已经进了历史。
+
+通知由 Android 宿主（`apps/android/src-tauri/src/received.rs`）发出，它订阅的是 webview 订阅的同一路事件：
+
+| 收到 | 通知 | 首页 |
+| --- | --- | --- |
+| 文本 | 标题 + 预览行，点一下打开应用 | 没有预览 |
+| 图片 | 图片本身作为预览，并带一个**分享**按钮 | 图片 + 分享按钮 |
+
+首页的预览是**推导出来的**，不是单独存的状态：它就是历史里最新的一条，只有那条是图片时才显示。所以之后收到
+文本时，预览和分享按钮消失，只是因为「最新一条」不再是图片 —— 没有第二份状态需要保持一致，重启后也没有东西
+需要失效。通知则是另一种机制达到同样的效果：文本和图片共用同一个通知 id，于是发出文本通知这件事本身就把图片
+预览和它的按钮**替换**掉了。
 
 ---
 

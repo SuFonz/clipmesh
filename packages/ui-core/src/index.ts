@@ -27,6 +27,7 @@ export type {
   PeerView,
   Platform,
   Result,
+  ScreenshotState,
   SendResult,
   SettingsView,
   StatusView,

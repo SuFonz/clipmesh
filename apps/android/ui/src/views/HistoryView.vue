@@ -9,6 +9,7 @@ import {
   ConfirmDialog,
   EmptyState,
   StatusPill,
+  androidApi,
   summarizeItem,
   t,
   toMessage,
@@ -22,6 +23,10 @@ import {
 
 /**
  * Android 历史页：单列、触摸优先。点卡片上的按钮复制或重发。
+ *
+ * 图片条目上是**分享**而不是复制：系统剪贴板收得下图片，但拿到一张图之后用户想做
+ * 的通常是发给别人，而复制还要再找地方粘贴。分享走系统面板（`ACTION_SEND` +
+ * `content://`），由原生侧用 FileProvider 提供 URI。
  */
 const historyStore = useHistoryStore();
 const peersStore = usePeersStore();
@@ -60,6 +65,16 @@ async function onResend(item: ClipboardItemView): Promise<void> {
     toast.success(t("android.history.toast.resent", { count: result.delivered }));
   } catch (cause) {
     toast.error(t("android.history.toast.resendFailed"), toMessage(cause));
+  }
+}
+
+/** 图片条目：交给系统分享面板。 */
+async function onShare(item: ClipboardItemView): Promise<void> {
+  try {
+    await androidApi.shareImage(item.id);
+    toast.success(t("android.history.toast.shared"));
+  } catch (cause) {
+    toast.error(t("android.history.toast.shareFailed"), toMessage(cause));
   }
 }
 
@@ -122,8 +137,10 @@ async function doClear(): Promise<void> {
         :thumbnail="historyStore.thumbnails[item.id] ?? null"
         :busy="historyStore.isBusy(item.id)"
         compact
+        image-action="share"
         @copy="onCopy"
         @resend="onResend"
+        @share="onShare"
       />
     </div>
 

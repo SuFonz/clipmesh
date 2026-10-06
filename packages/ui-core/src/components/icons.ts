@@ -14,6 +14,7 @@ export type IconName =
   | "link"
   | "send"
   | "copy"
+  | "share"
   | "trash"
   | "refresh"
   | "check"
@@ -102,6 +103,14 @@ export const ICONS: Record<IconName, IconDefinition> = {
       '<path d="M9.6 6.4V5.1A1.6 1.6 0 0 1 11.2 3.5h1.6a1.6 1.6 0 0 1 1.6 1.6v1.3"/>' +
       '<path d="M6.6 6.4l.78 12.1a2 2 0 0 0 2 1.9h5.24a2 2 0 0 0 2-1.9l.78-12.1"/>' +
       '<path d="M10.4 10.4v6.2M13.6 10.4v6.2"/>',
+  },
+  /** Android 系统分享面板的经典「三个节点」形状。 */
+  share: {
+    body:
+      '<circle cx="17.8" cy="5.4" r="2.6"/>' +
+      '<circle cx="6.2" cy="12" r="2.6"/>' +
+      '<circle cx="17.8" cy="18.6" r="2.6"/>' +
+      '<path d="M8.5 10.7l7-4.1M8.5 13.3l7 4.1"/>',
   },
   refresh: {
     body:

@@ -24,14 +24,15 @@
             </intent-filter>
         </activity>
 
-        <provider
-          android:name="androidx.core.content.FileProvider"
-          android:authorities="${applicationId}.fileprovider"
-          android:exported="false"
-          android:grantUriPermissions="true">
-          <meta-data
-            android:name="android.support.FILE_PROVIDER_PATHS"
-            android:resource="@xml/file_paths" />
-        </provider>
+        <!--
+          NOTE: the FileProvider used to be declared here, with
+          `res/xml/file_paths.xml` beside it. It now lives in the plugin module
+          (`apps/android/plugins/bridge/src/main/AndroidManifest.xml`), which
+          `tauri android init` cannot overwrite, and which gives it the same
+          `${applicationId}.fileprovider` authority. Do not add it back here:
+          two declarations of the same provider are merged, and the
+          `FILE_PROVIDER_PATHS` meta-data would then have two different values -
+          a build failure, not a harmless duplicate.
+        -->
     </application>
 </manifest>

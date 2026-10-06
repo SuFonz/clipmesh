@@ -1,5 +1,9 @@
 //! Collecting the clipboard broadcast that the notification action asked for.
 //!
+//! The screenshot watcher deposits into the same handoff, so both broadcasts are
+//! performed by this task; the other direction (what a peer sends *us*) is
+//! [`crate::received`].
+//!
 //! ## Why a task, and why it polls
 //!
 //! The notification's button cannot do the work itself. Android 10 and later
@@ -42,7 +46,7 @@ use clipmesh_clipboard::AndroidClipboardProvider;
 use clipmesh_core::SharedSyncManager;
 use clipmesh_protocol::ClipboardContent;
 
-use crate::plugin::{BroadcastPickup, ClipboardPayload, NativeBridge};
+use crate::plugin::{BroadcastPickup, ClipboardPayload, NativeBridge, PickupSource};
 
 /// How often to look for a request while the notification action exists.
 const ACTIVE_POLL: Duration = Duration::from_millis(500);
@@ -109,34 +113,56 @@ async fn deliver(
     }
 
     match &pickup.payload {
-        Some(payload) => deliver_read(clipboard, engine, payload).await,
+        Some(payload) => deliver_read(clipboard, engine, payload, pickup.source).await,
         // Defensive: the transparent activity only deposits a request it has
-        // content for. Nothing to send, and nobody to tell either - that path
-        // never showed the app.
+        // content for, and the screenshot watcher only deposits one it could
+        // read. Nothing to send, and nobody to tell either - neither path shows
+        // the app.
         None => tracing::warn!("a broadcast was requested without any content"),
     }
 }
 
-/// Send content that the transparent activity read while it held focus.
+/// Send content that the transparent activity - or the screenshot watcher - read.
+///
+/// Both arrive through the same handoff and go out the same way: an explicit
+/// send, which records the item in the history and ignores `autoSync` (the user
+/// asked for this content to go out, either by pressing the notification button
+/// or by turning screenshot sync on). What still applies is the content-kind
+/// policy inside `send_explicit` - "no images" means no images, screenshots
+/// included. Only the wording of a failure differs, which is what `source` is
+/// for.
 async fn deliver_read(
     clipboard: &AndroidClipboardProvider,
     engine: &SharedSyncManager,
     payload: &ClipboardPayload,
+    source: PickupSource,
 ) {
+    let what = source.describe();
+
     let platform = match payload.clone().into_platform() {
         Ok(platform) => platform,
-        Err(error) => return report(clipboard, format!("could not read the clipboard: {error}")),
+        Err(error) => return report(clipboard, format!("could not read {what}: {error}")),
     };
 
-    // `stage` records it as the current clipboard for later reads. Going through
-    // `push` instead would report a *change*, which the engine filters through
-    // `autoSync` - and that would leave this button dead for exactly the users
-    // who turned automatic sync off and press it by hand.
-    let Some(content) = clipboard.stage(platform) else {
-        return report(clipboard, empty_clipboard());
+    // The clipboard read is what the clipboard holds, so it is remembered as
+    // such. A screenshot never was on the clipboard, and recording it there
+    // would make a later background read - which falls back to that cache when
+    // the platform refuses one - report a screenshot as what the user copied.
+    //
+    // Neither path goes through `push`: that reports a clipboard *change*, which
+    // the engine filters through `autoSync`, and that would leave this button
+    // dead for exactly the users who turned automatic sync off and press it by
+    // hand.
+    let converted = match source {
+        PickupSource::Clipboard => clipboard.stage(platform),
+        PickupSource::Screenshot => clipboard.converted(platform),
     };
 
-    send(clipboard, engine, content).await;
+    let Some(content) = converted else {
+        return report(clipboard, nothing_readable(source));
+    };
+
+    send(clipboard, engine, content, what).await;
 }
 
 /// The fallback: the app was brought forward, so read through it.
@@ -157,7 +183,14 @@ async fn deliver_visible(
 
         match engine.read_clipboard().await {
             Ok(Some(content)) => {
-                if send(clipboard, engine, content).await {
+                if send(
+                    clipboard,
+                    engine,
+                    content,
+                    PickupSource::Clipboard.describe(),
+                )
+                .await
+                {
                     // Only after a successful broadcast: a failed one leaves the
                     // user in the app, looking at the reason.
                     if let Err(error) = bridge.leave_app() {
@@ -173,7 +206,7 @@ async fn deliver_visible(
         }
     }
 
-    report(clipboard, empty_clipboard());
+    report(clipboard, nothing_readable(PickupSource::Clipboard));
 }
 
 /// Push content to every connected trusted peer.
@@ -184,31 +217,38 @@ async fn send(
     clipboard: &AndroidClipboardProvider,
     engine: &SharedSyncManager,
     content: ClipboardContent,
+    what: &str,
 ) -> bool {
     match engine.send_explicit(content).await {
         Ok(outcome) => {
             tracing::info!(
                 delivered = outcome.delivered,
+                source = what,
                 "broadcast the clipboard for the notification action"
             );
             true
         }
         Err(error) => {
-            report(
-                clipboard,
-                format!("could not broadcast the clipboard: {error}"),
-            );
+            report(clipboard, format!("could not broadcast {what}: {error}"));
             false
         }
     }
 }
 
-/// What Android hands back when the clipboard holds nothing we carry.
+/// What to say when a pickup carried nothing usable.
 ///
-/// Worded like the engine's own error for the same situation, so the message
-/// reads the same however the user got there.
-fn empty_clipboard() -> String {
-    "the clipboard is empty or holds something ClipMesh does not carry".to_owned()
+/// The clipboard wording is the engine's own, so the message reads the same
+/// however the user got there. The screenshot one is different on purpose: the
+/// image was noticed but could not be decoded or read back, and telling a user
+/// their clipboard was empty when they just took a screenshot would send them
+/// looking in the wrong place.
+fn nothing_readable(source: PickupSource) -> String {
+    match source {
+        PickupSource::Clipboard => {
+            "the clipboard is empty or holds something ClipMesh does not carry".to_owned()
+        }
+        PickupSource::Screenshot => "the screenshot could not be read".to_owned(),
+    }
 }
 
 /// Report a failure through the engine's error channel.
