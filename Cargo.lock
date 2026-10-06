@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-android"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "clipmesh-clipboard",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-clipboard"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "clipmesh-identity",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "clipmesh-clipboard",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-identity"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "clipmesh-protocol",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-network"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "prost",
@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "clipmesh-security"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clipmesh-identity",
  "clipmesh-protocol",

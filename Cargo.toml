@@ -25,7 +25,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -114,12 +114,12 @@ dirs = "7.0.0"
 time = { version = "0.3.55", features = ["serde", "formatting"] }
 
 # --- internal crates --------------------------------------------------------
-clipmesh-protocol = { path = "crates/protocol", version = "0.1.0" }
-clipmesh-identity = { path = "crates/identity", version = "0.1.0" }
-clipmesh-security = { path = "crates/security", version = "0.1.0" }
-clipmesh-core = { path = "crates/core", version = "0.1.0" }
-clipmesh-network = { path = "crates/network", version = "0.1.0" }
-clipmesh-clipboard = { path = "crates/clipboard", version = "0.1.0" }
+clipmesh-protocol = { path = "crates/protocol", version = "1.0.0" }
+clipmesh-identity = { path = "crates/identity", version = "1.0.0" }
+clipmesh-security = { path = "crates/security", version = "1.0.0" }
+clipmesh-core = { path = "crates/core", version = "1.0.0" }
+clipmesh-network = { path = "crates/network", version = "1.0.0" }
+clipmesh-clipboard = { path = "crates/clipboard", version = "1.0.0" }
 
 # Release profile lives at the workspace root: member crates cannot override it.
 [profile.release]
