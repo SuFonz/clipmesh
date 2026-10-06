@@ -3,10 +3,14 @@ import {
   AppCard,
   AppIcon,
   AppToggle,
+  LANGUAGE_OPTIONS,
   MAX_IMAGE_BYTES_OPTIONS,
   StatusPill,
   formatMaxImageBytes,
   isMock,
+  languageLabel,
+  normalizeLanguageSetting,
+  t,
   toMessage,
   useSettingsStore,
   useToast,
@@ -26,7 +30,7 @@ async function patch(changes: Partial<SettingsView>): Promise<void> {
   try {
     await settingsStore.update(changes);
   } catch (cause) {
-    toast.error("设置未保存", toMessage(cause));
+    toast.error(t("settings.saveFailed"), toMessage(cause));
   }
 }
 
@@ -34,54 +38,81 @@ function onMaxImageBytes(event: Event): void {
   const value = Number((event.target as HTMLSelectElement).value);
   if (Number.isFinite(value)) void patch({ maxImageBytes: value });
 }
+
+/** 语言只认三种取值，收窄交给 i18n 层（与 Rust 侧同一条规则）。 */
+function onLanguage(event: Event): void {
+  const value = normalizeLanguageSetting((event.target as HTMLSelectElement).value);
+  void patch({ language: value });
+}
 </script>
 
 <template>
   <div class="view">
     <header class="cm-page-head">
       <div>
-        <h1 class="cm-page-title">设置</h1>
+        <h1 class="cm-page-title">{{ t("settings.title") }}</h1>
         <p class="cm-page-sub">
-          改动会立即生效并写入本机配置。标记
+          {{ t("settings.subtitle") }}
           <AppIcon class="inline-icon" name="zap" :size="12" />
-          的选项不需要重启应用。
+          {{ t("settings.subtitleZap") }}
         </p>
       </div>
       <div class="cm-page-actions">
-        <StatusPill v-if="mock" label="MOCK 数据" tone="warn" icon="info" />
+        <StatusPill v-if="mock" :label="t('common.mockBadge')" tone="warn" icon="info" />
         <StatusPill
-          :label="settingsStore.saving ? '保存中…' : '配置已就绪'"
+          :label="settingsStore.saving ? t('settings.status.saving') : t('settings.status.ready')"
           :tone="settingsStore.saving ? 'accent' : 'ok'"
           :pulse="settingsStore.saving"
         />
       </div>
     </header>
 
-    <div class="cm-grid">
-      <AppCard title="同步" icon="refresh" subtitle="控制哪些内容会被自动同步">
+    <div class="page-stack">
+      <AppCard
+        :title="t('settings.language.label')"
+        icon="settings"
+        :subtitle="t('settings.language.help')"
+      >
+        <select
+          class="cm-select lang-select"
+          :value="settingsStore.language"
+          :aria-label="t('settings.language.label')"
+          @change="onLanguage"
+        >
+          <option v-for="value in LANGUAGE_OPTIONS" :key="value" :value="value">
+            {{ languageLabel(value) }}
+          </option>
+        </select>
+      </AppCard>
+
+      <AppCard
+        :title="t('settings.sync.title')"
+        icon="refresh"
+        :subtitle="t('settings.sync.subtitle')"
+      >
         <div class="toggles">
           <AppToggle
             :model-value="settingsStore.settings?.autoSync ?? false"
-            label="后台自动同步"
-            description="监听本机剪贴板，内容一变化就推送给已信任设备。"
+            :label="t('settings.autoSync.label')"
+            :description="t('settings.autoSync.description')"
             @update:model-value="(v: boolean) => patch({ autoSync: v })"
           />
           <AppToggle
             :model-value="settingsStore.settings?.syncText ?? false"
-            label="同步文本"
+            :label="t('settings.syncText.label')"
             @update:model-value="(v: boolean) => patch({ syncText: v })"
           />
           <AppToggle
             :model-value="settingsStore.settings?.syncImages ?? false"
-            label="同步图片"
-            description="图片以原始 PNG 二进制分片传输，不走 Base64。"
+            :label="t('settings.syncImages.label')"
+            :description="t('settings.syncImages.description')"
             @update:model-value="(v: boolean) => patch({ syncImages: v })"
           />
         </div>
 
         <div class="field-row mt">
           <label class="cm-field grow">
-            <span class="cm-label">图片大小上限</span>
+            <span class="cm-label">{{ t("settings.maxImageBytes.label") }}</span>
             <select
               class="cm-select"
               :value="settingsStore.settings?.maxImageBytes ?? 0"
@@ -97,23 +128,28 @@ function onMaxImageBytes(event: Event): void {
             </select>
           </label>
           <div class="hint-box">
-            超过 <b>{{ formatMaxImageBytes(settingsStore.settings?.maxImageBytes ?? 0) }}</b> 的图片会被跳过，
-            并在日志里记一条。
+            {{ t("settings.maxImageBytes.hintBefore")
+            }}<b>{{ formatMaxImageBytes(settingsStore.settings?.maxImageBytes ?? 0) }}</b
+            >{{ t("settings.maxImageBytes.hintAfter") }}
           </div>
         </div>
       </AppCard>
 
-      <AppCard title="桌面行为" icon="zap" subtitle="窗口与开机启动">
+      <AppCard
+        :title="t('settings.desktop.title')"
+        icon="zap"
+        :subtitle="t('settings.desktop.subtitle')"
+      >
         <div class="toggles">
           <AppToggle
             :model-value="settingsStore.settings?.startMinimized ?? false"
-            label="启动后最小化到托盘"
-            description="开机自启时不弹出窗口，只在托盘里待命。"
+            :label="t('settings.startMinimized.label')"
+            :description="t('settings.startMinimized.description')"
             @update:model-value="(v: boolean) => patch({ startMinimized: v })"
           />
           <AppToggle
             :model-value="settingsStore.settings?.launchAtLogin ?? false"
-            label="开机自启"
+            :label="t('settings.launchAtLogin.label')"
             @update:model-value="(v: boolean) => patch({ launchAtLogin: v })"
           />
         </div>
@@ -127,6 +163,10 @@ function onMaxImageBytes(event: Event): void {
   display: inline-block;
   vertical-align: -1px;
   color: var(--warn);
+}
+
+.lang-select {
+  max-width: 260px;
 }
 
 .field-row {

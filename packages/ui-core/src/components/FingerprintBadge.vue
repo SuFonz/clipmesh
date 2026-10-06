@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 
 import { useToast } from "../composables/useToast";
+import { t } from "../i18n";
 import { copyToClipboard } from "../utils/dom";
 import { groupFingerprint } from "../utils/format";
 import AppIcon from "./AppIcon.vue";
@@ -38,13 +39,13 @@ async function copy(): Promise<void> {
   const ok = await copyToClipboard(props.fingerprint.replace(/\s+/g, ""));
   if (ok) {
     copied.value = true;
-    toast.success("指纹已复制", full.value);
+    toast.success(t("components.fingerprint.copiedToast"), full.value);
     if (resetTimer !== null) clearTimeout(resetTimer);
     resetTimer = setTimeout(() => {
       copied.value = false;
     }, 1_600);
   } else {
-    toast.error("复制失败", "当前环境不允许访问剪贴板");
+    toast.error(t("common.copyFailed"), t("components.fingerprint.copyUnavailable"));
   }
 }
 </script>
@@ -61,8 +62,10 @@ async function copy(): Promise<void> {
         v-if="copyable"
         class="fp-copy"
         type="button"
-        :title="copied ? '已复制' : '复制完整指纹'"
-        :aria-label="copied ? '已复制' : '复制完整指纹'"
+        :title="copied ? t('components.fingerprint.copied') : t('components.fingerprint.copyTitle')"
+        :aria-label="
+          copied ? t('components.fingerprint.copied') : t('components.fingerprint.copyTitle')
+        "
         @click.stop.prevent="copy"
       >
         <AppIcon :name="copied ? 'check' : 'copy'" :size="14" />

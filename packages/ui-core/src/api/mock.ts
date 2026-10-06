@@ -27,6 +27,7 @@ import type {
   EventName,
   EventPayload,
   IdentityView,
+  LanguageSetting,
   PairingPrompt,
   PeerView,
   Platform,
@@ -301,6 +302,7 @@ function initialState(): MockState {
       startMinimized: false,
       launchAtLogin: true,
       androidForegroundService: platform === "android",
+      language: "system",
     },
     peers: samplePeers(),
     trusted: sampleTrusted(),
@@ -501,11 +503,15 @@ function registerJobs(): void {
   }, 34_000);
 
   // 非致命错误提示
+  //
+  // 这里伪造的是**后端**推来的错误，所以文案跟 Rust 侧保持一致（英文）：
+  // `CoreError` 的 Display 本来就是英文，mock 若用中文，浏览器里看到的
+  // 语言就和真机不一样了。
   job(64_000, () => {
     const messages = [
-      "与 Pixel 8 的连接中断，正在重连…",
-      "图片超过 8 MiB 上限，已跳过 1 个条目。",
-      "mDNS 广播失败一次，已自动重试。",
+      "lost the connection to Pixel 8, reconnecting…",
+      "image exceeds the 8 MiB limit, skipped 1 item.",
+      "one mDNS announcement failed; retried automatically.",
     ];
     const message = messages[Math.floor(Math.random() * messages.length)];
     emit("clipmesh://error", message);
@@ -655,7 +661,15 @@ function patchOf(value: unknown): Partial<SettingsView> {
   if (typeof raw.androidForegroundService === "boolean") {
     patch.androidForegroundService = raw.androidForegroundService;
   }
+  const language = languageOf(raw.language);
+  if (language !== undefined) patch.language = language;
   return patch;
+}
+
+/** 与 Rust 侧 `Language::from_tag` 对齐：认识的标签原样接受，其余退化成 `system`。 */
+function languageOf(value: unknown): LanguageSetting | undefined {
+  if (typeof value !== "string") return undefined;
+  return value === "zh-CN" || value === "en" ? value : "system";
 }
 
 const ANDROID_ONLY = "android commands are only available on Android";
@@ -744,7 +758,7 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
       const deviceId = str(a.deviceId);
       const peer = state.peers.find((p) => p.deviceId === deviceId);
       if (!peer) throw new Error(`unknown device: ${deviceId}`);
-      if (peer.trusted) throw new Error(`${peer.name} 已经在信任列表里了`);
+      if (peer.trusted) throw new Error(`${peer.name} is already in the trust list`);
       peer.pairing = true;
       broadcastPeers();
       // 假的后端会在一小会儿之后"被对方接受"
@@ -836,7 +850,7 @@ async function dispatch(name: CommandName, args: unknown): Promise<unknown> {
     }
     case "send_text": {
       const content = str(a.content);
-      if (content.trim() === "") throw new Error("内容不能为空");
+      if (content.trim() === "") throw new Error("content cannot be empty");
       state.clipboard = content;
       return send({
         kind: "text",

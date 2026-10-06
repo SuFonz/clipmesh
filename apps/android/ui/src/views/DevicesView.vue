@@ -8,7 +8,9 @@ import {
   EmptyState,
   FingerprintBadge,
   StatusPill,
+  t,
   toMessage,
+  useI18n,
   usePairingStore,
   usePeersStore,
   useToast,
@@ -24,6 +26,8 @@ const peersStore = usePeersStore();
 const trustedStore = useTrustedStore();
 const pairingStore = usePairingStore();
 const toast = useToast();
+/** 「信任于 2025/3/5」里的日期也要跟着界面语言走，不能用系统 locale 直接格式化。 */
+const { locale } = useI18n();
 
 const refreshing = ref(false);
 const pendingUnpair = ref<TrustedDeviceView | null>(null);
@@ -42,7 +46,7 @@ async function refresh(): Promise<void> {
   try {
     await Promise.all([peersStore.refresh(), trustedStore.refresh(), pairingStore.refresh()]);
   } catch (cause) {
-    toast.error("刷新失败", toMessage(cause));
+    toast.error(t("common.refreshFailed"), toMessage(cause));
   } finally {
     refreshing.value = false;
   }
@@ -51,18 +55,25 @@ async function refresh(): Promise<void> {
 async function pair(deviceId: string): Promise<void> {
   try {
     await peersStore.pair(deviceId);
-    toast.info("已发起配对", "让对方核对指纹后接受。");
+    toast.info(
+      t("android.devices.toast.pairRequested"),
+      t("android.devices.toast.pairRequestedDescription"),
+    );
   } catch (cause) {
-    toast.error("配对失败", toMessage(cause));
+    toast.error(t("android.devices.toast.pairFailed"), toMessage(cause));
   }
 }
 
 async function respond(deviceId: string, name: string, accept: boolean): Promise<void> {
   try {
     await pairingStore.respond(deviceId, accept);
-    toast[accept ? "success" : "info"](accept ? `已信任 ${name}` : `已拒绝 ${name}`);
+    toast[accept ? "success" : "info"](
+      accept
+        ? t("android.devices.toast.trusted", { name })
+        : t("android.devices.toast.rejected", { name }),
+    );
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
   }
 }
 
@@ -72,10 +83,10 @@ async function confirmUnpair(): Promise<void> {
   unpairing.value = true;
   try {
     await trustedStore.unpair(target.deviceId);
-    toast.success("已解除信任", target.name);
+    toast.success(t("android.devices.toast.unpaired"), target.name);
     pendingUnpair.value = null;
   } catch (cause) {
-    toast.error("解除失败", toMessage(cause));
+    toast.error(t("android.devices.toast.unpairFailed"), toMessage(cause));
   } finally {
     unpairing.value = false;
   }
@@ -85,17 +96,24 @@ async function confirmUnpair(): Promise<void> {
 <template>
   <div class="view">
     <div class="top">
-      <StatusPill :label="`发现 ${peersStore.count}`" tone="info" icon="radar" size="sm" />
+      <StatusPill
+        :label="t('android.devices.discoveredCount', { count: peersStore.count })"
+        tone="info"
+        icon="radar"
+        size="sm"
+      />
       <span class="spacer" />
-      <AppButton size="sm" icon="refresh" :loading="refreshing" @click="refresh">刷新</AppButton>
+      <AppButton size="sm" icon="refresh" :loading="refreshing" @click="refresh">
+        {{ t("common.refresh") }}
+      </AppButton>
     </div>
 
     <AppCard
       v-if="pairingStore.incoming.length"
       tone="accent"
-      title="配对请求"
+      :title="t('android.devices.incoming.title')"
       icon="link"
-      :subtitle="`${pairingStore.incoming.length} 个请求等待确认`"
+      :subtitle="t('android.devices.incoming.subtitle', { count: pairingStore.incoming.length })"
     >
       <div class="cm-list">
         <div v-for="prompt in pairingStore.incoming" :key="prompt.deviceId" class="prompt">
@@ -108,7 +126,10 @@ async function confirmUnpair(): Promise<void> {
             :pairing="true"
             hide-fingerprint
           />
-          <FingerprintBadge :fingerprint="prompt.fingerprint" label="与对方屏幕核对指纹" />
+          <FingerprintBadge
+            :fingerprint="prompt.fingerprint"
+            :label="t('android.devices.verifyFingerprint')"
+          />
           <div class="prompt-actions">
             <AppButton
               variant="primary"
@@ -118,7 +139,7 @@ async function confirmUnpair(): Promise<void> {
               :loading="pairingStore.isBusy(prompt.deviceId)"
               @click="respond(prompt.deviceId, prompt.name, true)"
             >
-              接受
+              {{ t("android.devices.accept") }}
             </AppButton>
             <AppButton
               variant="ghost"
@@ -128,14 +149,18 @@ async function confirmUnpair(): Promise<void> {
               :disabled="pairingStore.isBusy(prompt.deviceId)"
               @click="respond(prompt.deviceId, prompt.name, false)"
             >
-              拒绝
+              {{ t("android.devices.reject") }}
             </AppButton>
           </div>
         </div>
       </div>
     </AppCard>
 
-    <AppCard title="发现的设备" icon="radar" :subtitle="`${discovered.length} 台等待配对`">
+    <AppCard
+      :title="t('android.devices.discovered.title')"
+      icon="radar"
+      :subtitle="t('android.devices.discovered.subtitle', { count: discovered.length })"
+    >
       <div v-if="discovered.length" class="cm-list">
         <DeviceCard
           v-for="peer in discovered"
@@ -159,19 +184,29 @@ async function confirmUnpair(): Promise<void> {
               :loading="peersStore.isBusy(peer.deviceId)"
               @click="pair(peer.deviceId)"
             >
-              {{ peer.pairing ? "等待中" : "配对" }}
+              {{ peer.pairing ? t("android.devices.waiting") : t("android.devices.pair") }}
             </AppButton>
           </template>
         </DeviceCard>
       </div>
-      <EmptyState v-else compact icon="radar" title="没有发现新设备" />
+      <EmptyState
+        v-else
+        compact
+        icon="radar"
+        :title="t('android.devices.discovered.empty.title')"
+      />
     </AppCard>
 
     <AppCard
-      title="已信任的设备"
+      :title="t('android.devices.trusted.title')"
       icon="shield"
       tone="success"
-      :subtitle="`${trustedStore.count} 台 · ${trustedStore.onlineCount} 台在线`"
+      :subtitle="
+        t('android.devices.trusted.subtitle', {
+          count: trustedStore.count,
+          online: trustedStore.onlineCount,
+        })
+      "
     >
       <div v-if="trustedRows.length" class="cm-list">
         <DeviceCard
@@ -183,7 +218,11 @@ async function confirmUnpair(): Promise<void> {
           :online="row.online"
           :trusted="true"
           :last-seen="row.device.trustedAt"
-          :subtitle="`信任于 ${new Date(row.device.trustedAt).toLocaleDateString()}`"
+          :subtitle="
+            t('android.devices.trustedAt', {
+              date: new Date(row.device.trustedAt).toLocaleDateString(locale),
+            })
+          "
           hide-fingerprint
         >
           <template #actions>
@@ -194,7 +233,7 @@ async function confirmUnpair(): Promise<void> {
               :loading="trustedStore.busyId === row.device.deviceId"
               @click="pendingUnpair = row.device"
             >
-              解除
+              {{ t("android.devices.unpair") }}
             </AppButton>
           </template>
         </DeviceCard>
@@ -203,21 +242,32 @@ async function confirmUnpair(): Promise<void> {
         v-else
         compact
         icon="shield"
-        title="还没有信任任何设备"
-        description="先在上面找一台设备完成配对。"
+        :title="t('android.devices.trusted.empty.title')"
+        :description="t('android.devices.trusted.empty.description')"
       />
     </AppCard>
 
-    <AppCard v-if="pendingUnpair" tone="danger" title="解除信任？" icon="alert">
+    <AppCard
+      v-if="pendingUnpair"
+      tone="danger"
+      :title="t('android.devices.unpairDialog.title')"
+      icon="alert"
+    >
       <p class="confirm-text">
-        {{ pendingUnpair.name }} 会被移出信任列表并断开，需要重新配对才能同步。
+        {{ t("android.devices.unpairDialog.message", { name: pendingUnpair.name }) }}
       </p>
       <div class="prompt-actions">
-        <AppButton variant="ghost" size="lg" block :disabled="unpairing" @click="pendingUnpair = null">
-          取消
+        <AppButton
+          variant="ghost"
+          size="lg"
+          block
+          :disabled="unpairing"
+          @click="pendingUnpair = null"
+        >
+          {{ t("common.cancel") }}
         </AppButton>
         <AppButton variant="danger" size="lg" block :loading="unpairing" @click="confirmUnpair">
-          解除信任
+          {{ t("android.devices.unpairDialog.confirm") }}
         </AppButton>
       </div>
     </AppCard>

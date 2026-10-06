@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import { listPeers, requestPairing, unpairDevice } from "../api/commands";
+import { t } from "../i18n";
 import type { PeerView } from "../types";
 import { toMessage, useStatusStore } from "./status";
 import { useTrustedStore } from "./trusted";
@@ -50,8 +51,8 @@ export const usePeersStore = defineStore("peers", () => {
    * 设备 id -> 展示名。历史条目、toast 里只有 id，需要在这里翻译成人看的名字。
    */
   function nameOf(deviceId: string): string {
-    if (deviceId === "") return "未知设备";
-    if (deviceId === statusStore.deviceId) return "本机";
+    if (deviceId === "") return t("common.unknownDevice");
+    if (deviceId === statusStore.deviceId) return t("common.thisDevice");
     const peer = byId(deviceId);
     if (peer) return peer.name;
     const known = trustedStore.nameOf(deviceId);

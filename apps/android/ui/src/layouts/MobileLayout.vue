@@ -8,12 +8,14 @@ import {
   StatusPill,
   isMock,
   sendClipboard,
+  t,
   toMessage,
   usePairingStore,
   usePeersStore,
   useStatusStore,
   useToast,
   type IconName,
+  type MessageKey,
 } from "@clipmesh/ui-core";
 
 /**
@@ -22,15 +24,16 @@ import {
  */
 interface Tab {
   to: string;
-  label: string;
+  labelKey: MessageKey;
   icon: IconName;
 }
 
-const tabs: Tab[] = [
-  { to: "/", label: "首页", icon: "clipboard" },
-  { to: "/devices", label: "设备", icon: "devices" },
-  { to: "/history", label: "历史", icon: "history" },
-  { to: "/settings", label: "设置", icon: "settings" },
+/** 标签存的是**文案键**：数组本身在模块加载时建好，文字要等渲染时再取。 */
+const TABS: Tab[] = [
+  { to: "/", labelKey: "android.nav.home", icon: "clipboard" },
+  { to: "/devices", labelKey: "android.nav.devices", icon: "devices" },
+  { to: "/history", labelKey: "android.nav.history", icon: "history" },
+  { to: "/settings", labelKey: "android.nav.settings", icon: "settings" },
 ];
 
 const route = useRoute();
@@ -43,8 +46,8 @@ const mock = isMock();
 const busy = ref(false);
 
 const title = computed<string>(() => {
-  const meta = route.meta as { title?: string };
-  return meta.title ?? "ClipMesh";
+  const key = route.meta.title;
+  return key ? t(key) : "ClipMesh";
 });
 
 const deviceBadge = computed<number>(
@@ -52,8 +55,11 @@ const deviceBadge = computed<number>(
 );
 
 const subtitle = computed<string>(() => {
-  if (!statusStore.running) return "引擎已停止";
-  return `${statusStore.connectedPeers} 台在线 · 已信任 ${statusStore.trustedPeers}`;
+  if (!statusStore.running) return t("android.shell.engineStopped");
+  return t("android.shell.subtitle", {
+    online: statusStore.connectedPeers,
+    trusted: statusStore.trustedPeers,
+  });
 });
 
 async function toggleEngine(): Promise<void> {
@@ -61,13 +67,13 @@ async function toggleEngine(): Promise<void> {
   try {
     if (statusStore.running) {
       await statusStore.stop();
-      toast.info("引擎已停止");
+      toast.info(t("android.shell.toast.engineStopped"));
     } else {
       await statusStore.start();
-      toast.success("引擎已启动");
+      toast.success(t("android.shell.toast.engineStarted"));
     }
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
   } finally {
     busy.value = false;
   }
@@ -85,10 +91,12 @@ async function runBroadcast(): Promise<void> {
   try {
     const result = await sendClipboard();
     toast.success(
-      result.delivered > 0 ? `已广播到 ${result.delivered} 台设备` : "没有在线设备，已存入历史",
+      result.delivered > 0
+        ? t("android.shell.toast.broadcast", { count: result.delivered })
+        : t("android.shell.toast.broadcastNoDevices"),
     );
   } catch (cause) {
-    toast.error("广播失败", toMessage(cause));
+    toast.error(t("android.shell.toast.broadcastFailed"), toMessage(cause));
   } finally {
     sending.value = false;
   }
@@ -123,7 +131,7 @@ async function broadcast(): Promise<void> {
         <span v-if="mock" class="mock">MOCK</span>
         <StatusPill
           v-if="pairingStore.incomingCount > 0"
-          :label="`${pairingStore.incomingCount} 个配对请求`"
+          :label="t('android.shell.pairingRequests', { count: pairingStore.incomingCount })"
           tone="warn"
           pulse
           size="sm"
@@ -141,13 +149,17 @@ async function broadcast(): Promise<void> {
           :disabled="!statusStore.running"
           @click="broadcast"
         >
-          广播剪贴板
+          {{ t("android.shell.broadcast") }}
         </AppButton>
         <button
           class="icon-btn"
           type="button"
           :disabled="busy"
-          :aria-label="statusStore.running ? '停止引擎' : '启动引擎'"
+          :aria-label="
+            statusStore.running
+              ? t('android.shell.engineStopTitle')
+              : t('android.shell.engineStartTitle')
+          "
           @click="toggleEngine"
         >
           <AppIcon :name="statusStore.running ? 'power' : 'zap'" :size="18" />
@@ -159,9 +171,9 @@ async function broadcast(): Promise<void> {
       <slot />
     </main>
 
-    <nav class="tabbar" aria-label="主导航">
+    <nav class="tabbar" :aria-label="t('android.nav.aria')">
       <RouterLink
-        v-for="tab in tabs"
+        v-for="tab in TABS"
         :key="tab.to"
         :to="tab.to"
         class="tab"
@@ -173,7 +185,7 @@ async function broadcast(): Promise<void> {
             {{ deviceBadge }}
           </span>
         </span>
-        <span class="tab-label">{{ tab.label }}</span>
+        <span class="tab-label">{{ t(tab.labelKey) }}</span>
       </RouterLink>
     </nav>
   </div>

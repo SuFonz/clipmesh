@@ -1,17 +1,25 @@
-/** 纯格式化函数：不依赖 Vue，方便在 store / 组件 / 测试里随便用。 */
+/**
+ * 纯格式化函数：不依赖 Vue 组件，store / 组件 / 测试里都能随便用。
+ *
+ * 与 i18n 的耦合只有一处：这些函数读当前语言的 ref，所以在模板或 `computed`
+ * 里调用它们会跟着语言切换重算（在模块顶层调用一次则不会）。
+ */
 
+import { locale, t } from "../i18n";
+import type { MessageLocale } from "../i18n";
 import type { ClipboardItemView, Platform } from "../types";
 
-const PLATFORM_LABELS: Record<Platform, string> = {
+/** 平台名是专有名词，不翻译；只有「未知」这一档需要文案。 */
+const PLATFORM_LABELS: Record<Exclude<Platform, "unknown">, string> = {
   windows: "Windows",
   linux: "Linux",
   macos: "macOS",
   android: "Android",
-  unknown: "未知平台",
 };
 
 export function platformLabel(platform: Platform): string {
-  return PLATFORM_LABELS[platform] ?? PLATFORM_LABELS.unknown;
+  const known = PLATFORM_LABELS[platform as Exclude<Platform, "unknown">];
+  return known ?? t("common.platformUnknown");
 }
 
 /** 把 `A1B2C3D4...` 规范成 `A1B2 C3D4 ...`，每 4 个字符一组。 */
@@ -53,13 +61,19 @@ export function formatClock(timestamp: number): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** `3月5日 14:03` 这种带日期的时刻。 */
+/** `3月5日` / `Mar 5` 这种「月 + 日」。按语言各建一个，避免每次调用都新建。 */
+const MONTH_DAY_FORMATTERS: Record<MessageLocale, Intl.DateTimeFormat> = {
+  "zh-CN": new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }),
+  en: new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }),
+};
+
+/** `3月5日 14:03` / `Mar 5 14:03` 这种带日期的时刻。 */
 export function formatDateTime(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
   const sameYear = date.getFullYear() === now.getFullYear();
   const head = sameYear
-    ? `${date.getMonth() + 1}月${date.getDate()}日`
+    ? MONTH_DAY_FORMATTERS[locale.value].format(date)
     : `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
   return `${head} ${formatClock(timestamp)}`;
 }
@@ -68,11 +82,11 @@ export function formatDateTime(timestamp: number): string {
 export function formatRelative(timestamp: number, now = Date.now()): string {
   const diff = now - timestamp;
   if (!Number.isFinite(diff)) return "—";
-  if (diff < 5_000) return "刚刚";
-  if (diff < 60_000) return `${Math.floor(diff / 1000)} 秒前`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  if (diff < 5_000) return t("common.time.justNow");
+  if (diff < 60_000) return t("common.time.secondsAgo", { count: Math.floor(diff / 1000) });
+  if (diff < 3_600_000) return t("common.time.minutesAgo", { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t("common.time.hoursAgo", { count: Math.floor(diff / 3_600_000) });
+  if (diff < 7 * 86_400_000) return t("common.time.daysAgo", { count: Math.floor(diff / 86_400_000) });
   return formatDateTime(timestamp);
 }
 
@@ -85,7 +99,11 @@ export function truncate(text: string, max = 80): string {
 /** 历史条目的一行摘要。 */
 export function summarizeItem(item: ClipboardItemView, max = 80): string {
   if (item.kind === "text") return truncate(item.content, max);
-  return `图片 ${item.width}×${item.height} · ${formatBytes(item.size)}`;
+  return t("common.imageSummary", {
+    width: item.width,
+    height: item.height,
+    size: formatBytes(item.size),
+  });
 }
 
 /** UUID 之类的短展示。 */

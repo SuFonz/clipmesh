@@ -8,6 +8,7 @@ import {
   isMock,
   platformLabel,
   shortFingerprint,
+  t,
   toMessage,
   usePairingStore,
   usePeersStore,
@@ -15,6 +16,7 @@ import {
   useToast,
   useTrustedStore,
   type IconName,
+  type MessageKey,
 } from "@clipmesh/ui-core";
 
 /**
@@ -23,17 +25,33 @@ import {
  */
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: MessageKey;
   icon: IconName;
-  hint: string;
+  hintKey: MessageKey;
 }
 
-const navItems: NavItem[] = [
-  { to: "/", label: "首页", icon: "dashboard", hint: "本机与在线设备" },
-  { to: "/devices", label: "设备", icon: "devices", hint: "配对请求 / 发现 / 信任的设备" },
-  { to: "/history", label: "历史", icon: "history", hint: "最近的剪贴板内容" },
-  { to: "/settings", label: "设置", icon: "settings", hint: "同步与身份" },
-  { to: "/about", label: "关于", icon: "info", hint: "版本与运行信息" },
+/** 标签存的是**文案键**：数组本身在模块加载时建好，文字要等渲染时再取。 */
+const NAV_ITEMS: NavItem[] = [
+  { to: "/", labelKey: "desktop.nav.home", icon: "dashboard", hintKey: "desktop.nav.homeHint" },
+  {
+    to: "/devices",
+    labelKey: "desktop.nav.devices",
+    icon: "devices",
+    hintKey: "desktop.nav.devicesHint",
+  },
+  {
+    to: "/history",
+    labelKey: "desktop.nav.history",
+    icon: "history",
+    hintKey: "desktop.nav.historyHint",
+  },
+  {
+    to: "/settings",
+    labelKey: "desktop.nav.settings",
+    icon: "settings",
+    hintKey: "desktop.nav.settingsHint",
+  },
+  { to: "/about", labelKey: "desktop.nav.about", icon: "info", hintKey: "desktop.nav.aboutHint" },
 ];
 
 const route = useRoute();
@@ -53,8 +71,8 @@ const badges = computed<Record<string, number>>(() => ({
 
 const isActive = (to: string): boolean => route.path === to;
 const pageTitle = computed<string>(() => {
-  const meta = route.meta as { title?: string };
-  return meta.title ?? "ClipMesh";
+  const key = route.meta.title;
+  return key ? t(key) : "ClipMesh";
 });
 
 async function toggleEngine(): Promise<void> {
@@ -62,13 +80,19 @@ async function toggleEngine(): Promise<void> {
   try {
     if (statusStore.running) {
       await statusStore.stop();
-      toast.info("引擎已停止", "不再监听剪贴板，也不再响应局域网请求。");
+      toast.info(
+        t("desktop.engine.stoppedToast"),
+        t("desktop.engine.stoppedDescription"),
+      );
     } else {
       await statusStore.start();
-      toast.success("引擎已启动", "正在通过 mDNS 广播并监听剪贴板。");
+      toast.success(
+        t("desktop.engine.startedToast"),
+        t("desktop.engine.startedDescription"),
+      );
     }
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
   } finally {
     toggling.value = false;
   }
@@ -82,21 +106,21 @@ async function toggleEngine(): Promise<void> {
         <span class="logo"><AppIcon name="link" :size="18" /></span>
         <span class="brand-text">
           <strong>ClipMesh</strong>
-          <small>P2P 剪贴板同步</small>
+          <small>{{ t("desktop.brand.tagline") }}</small>
         </span>
       </div>
 
-      <nav class="nav" aria-label="主导航">
+      <nav class="nav" :aria-label="t('desktop.nav.aria')">
         <RouterLink
-          v-for="item in navItems"
+          v-for="item in NAV_ITEMS"
           :key="item.to"
           :to="item.to"
           class="nav-item"
           :class="{ active: isActive(item.to) }"
-          :title="item.hint"
+          :title="t(item.hintKey)"
         >
           <AppIcon :name="item.icon" :size="17" />
-          <span class="nav-label">{{ item.label }}</span>
+          <span class="nav-label">{{ t(item.labelKey) }}</span>
           <span v-if="badges[item.to]" class="nav-badge">{{ badges[item.to] }}</span>
         </RouterLink>
       </nav>
@@ -107,14 +131,12 @@ async function toggleEngine(): Promise<void> {
           <span class="self-meta">{{ platformLabel(statusStore.platform) }}</span>
         </div>
         <StatusPill
-          :label="statusStore.running ? '运行中' : '已停止'"
+          :label="statusStore.running ? t('desktop.status.running') : t('desktop.status.stopped')"
           :tone="statusStore.running ? 'ok' : 'idle'"
           :pulse="statusStore.running"
           size="sm"
         />
-        <span v-if="mock" class="mock" title="没有检测到 Tauri 运行时，正在使用内存 mock 数据">
-          MOCK
-        </span>
+        <span v-if="mock" class="mock" :title="t('desktop.status.mockTitle')"> MOCK </span>
       </div>
     </aside>
 
@@ -130,17 +152,20 @@ async function toggleEngine(): Promise<void> {
         <span class="sb-sep" />
         <span class="sb-item">
           <AppIcon name="devices" :size="13" />
-          在线 <b>{{ statusStore.connectedPeers }}</b>
+          {{ t("desktop.statusbar.online") }} <b>{{ statusStore.connectedPeers }}</b>
         </span>
         <span class="sb-item">
           <AppIcon name="shield" :size="13" />
-          已信任 <b>{{ trustedStore.count }}</b>
+          {{ t("desktop.statusbar.trusted") }} <b>{{ trustedStore.count }}</b>
         </span>
         <span class="sb-item">
           <AppIcon name="radar" :size="13" />
-          发现 <b>{{ peersStore.count }}</b>
+          {{ t("desktop.statusbar.discovered") }} <b>{{ peersStore.count }}</b>
         </span>
-        <span class="sb-item cm-mono" :title="`mDNS 监听端口 ${statusStore.listenPort}`">
+        <span
+          class="sb-item cm-mono"
+          :title="t('desktop.statusbar.portTitle', { port: statusStore.listenPort })"
+        >
           :{{ statusStore.listenPort }}
         </span>
 
@@ -163,11 +188,11 @@ async function toggleEngine(): Promise<void> {
           class="sb-power"
           type="button"
           :disabled="toggling"
-          :title="statusStore.running ? '停止引擎' : '启动引擎'"
+          :title="statusStore.running ? t('desktop.engine.stopTitle') : t('desktop.engine.startTitle')"
           @click="toggleEngine"
         >
           <AppIcon :name="statusStore.running ? 'power' : 'zap'" :size="14" />
-          {{ statusStore.running ? "停止" : "启动" }}
+          {{ statusStore.running ? t("desktop.engine.stop") : t("desktop.engine.start") }}
         </button>
       </footer>
     </div>

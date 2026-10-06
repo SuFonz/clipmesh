@@ -2,7 +2,8 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import { getSettings, updateSettings } from "../api/commands";
-import type { SettingsView } from "../types";
+import { applyLanguageSetting } from "../i18n";
+import type { LanguageSetting, SettingsView } from "../types";
 import { useIdentityStore } from "./identity";
 import { toMessage, useStatusStore } from "./status";
 
@@ -37,9 +38,17 @@ export const useSettingsStore = defineStore("settings", () => {
   const androidForegroundService = computed<boolean>(
     () => settings.value?.androidForegroundService ?? false,
   );
+  const language = computed<LanguageSetting>(() => settings.value?.language ?? "system");
 
+  /**
+   * 写本地设置视图。
+   *
+   * 语言是 i18n 层的全局 ref（不是 Pinia 状态），所以每次拿到设置快照都要
+   * 往那边同步一次 —— 这里是**唯一**的同步点，`refresh` 与 `update` 都经过它。
+   */
   function setSettings(next: SettingsView): void {
     settings.value = next;
+    applyLanguageSetting(next.language);
   }
 
   async function refresh(): Promise<void> {
@@ -58,7 +67,12 @@ export const useSettingsStore = defineStore("settings", () => {
   /** 局部更新：乐观写本地，失败回滚。 */
   async function update(patch: Partial<SettingsView>): Promise<void> {
     const previous = settings.value;
-    if (previous) settings.value = { ...previous, ...patch };
+    if (previous) {
+      const optimistic = { ...previous, ...patch };
+      settings.value = optimistic;
+      // 刚在下拉框里选的语言要立刻生效，不能等一个 IPC 往返
+      if (patch.language !== undefined) applyLanguageSetting(optimistic.language);
+    }
     saving.value = true;
     try {
       setSettings(await updateSettings(patch));
@@ -72,7 +86,10 @@ export const useSettingsStore = defineStore("settings", () => {
       }
       error.value = null;
     } catch (cause) {
-      if (previous) settings.value = previous;
+      if (previous) {
+        settings.value = previous;
+        applyLanguageSetting(previous.language);
+      }
       error.value = toMessage(cause);
       throw cause;
     } finally {
@@ -112,6 +129,7 @@ export const useSettingsStore = defineStore("settings", () => {
     startMinimized,
     launchAtLogin,
     androidForegroundService,
+    language,
     setSettings,
     refresh,
     update,

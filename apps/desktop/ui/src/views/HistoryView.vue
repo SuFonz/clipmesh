@@ -10,12 +10,14 @@ import {
   EmptyState,
   StatusPill,
   summarizeItem,
+  t,
   toMessage,
   useHistoryStore,
   usePeersStore,
   useToast,
   type ClipboardItemView,
   type HistoryFilter,
+  type MessageKey,
 } from "@clipmesh/ui-core";
 
 /**
@@ -28,10 +30,11 @@ const toast = useToast();
 const clearing = ref(false);
 const confirmClear = ref(false);
 
-const filters: Array<{ value: HistoryFilter; label: string; count: () => number }> = [
-  { value: "all", label: "全部", count: () => historyStore.count },
-  { value: "text", label: "文本", count: () => historyStore.textCount },
-  { value: "image", label: "图片", count: () => historyStore.imageCount },
+/** 筛选按钮上存的是文案键 —— 数组在模块加载时建好，文字要等渲染时再取。 */
+const FILTERS: Array<{ value: HistoryFilter; labelKey: MessageKey; count: () => number }> = [
+  { value: "all", labelKey: "desktop.history.filter.all", count: () => historyStore.count },
+  { value: "text", labelKey: "desktop.history.filter.text", count: () => historyStore.textCount },
+  { value: "image", labelKey: "desktop.history.filter.image", count: () => historyStore.imageCount },
 ];
 
 const list = computed(() => historyStore.filtered);
@@ -45,9 +48,9 @@ function clearFilters(): void {
 async function onCopy(item: ClipboardItemView): Promise<void> {
   try {
     await historyStore.copy(item.id);
-    toast.success("已复制到本机剪贴板", summarizeItem(item, 48));
+    toast.success(t("desktop.history.toast.copied"), summarizeItem(item, 48));
   } catch (cause) {
-    toast.error("复制失败", toMessage(cause));
+    toast.error(t("common.copyFailed"), toMessage(cause));
   }
 }
 
@@ -55,12 +58,15 @@ async function onResend(item: ClipboardItemView): Promise<void> {
   try {
     const result = await historyStore.resend(item.id);
     if (result.delivered > 0) {
-      toast.success(`已重新发送到 ${result.delivered} 台设备`);
+      toast.success(t("desktop.history.toast.resent", { count: result.delivered }));
     } else {
-      toast.warn("没有在线设备", "内容仍在历史里，等设备上线再试。");
+      toast.warn(
+        t("common.noOnlineDevices"),
+        t("desktop.history.toast.noOnlineDevicesDescription"),
+      );
     }
   } catch (cause) {
-    toast.error("重发失败", toMessage(cause));
+    toast.error(t("desktop.history.toast.resendFailed"), toMessage(cause));
   }
 }
 
@@ -69,9 +75,9 @@ async function doClear(): Promise<void> {
   try {
     await historyStore.clear();
     confirmClear.value = false;
-    toast.success("历史已清空");
+    toast.success(t("desktop.history.toast.cleared"));
   } catch (cause) {
-    toast.error("清空失败", toMessage(cause));
+    toast.error(t("desktop.history.toast.clearFailed"), toMessage(cause));
   } finally {
     clearing.value = false;
   }
@@ -81,7 +87,7 @@ async function refresh(): Promise<void> {
   try {
     await historyStore.refresh();
   } catch (cause) {
-    toast.error("刷新失败", toMessage(cause));
+    toast.error(t("common.refreshFailed"), toMessage(cause));
   }
 }
 </script>
@@ -90,21 +96,27 @@ async function refresh(): Promise<void> {
   <div class="view">
     <header class="cm-page-head">
       <div>
-        <h1 class="cm-page-title">历史</h1>
+        <h1 class="cm-page-title">{{ t("desktop.nav.history") }}</h1>
         <p class="cm-page-sub">
-          最多保留 50 条，最新在前。图片只保存元数据，缩略图是在本机现取的。
+          {{ t("desktop.history.subtitle") }}
         </p>
       </div>
       <div class="cm-page-actions">
-        <StatusPill :label="`共 ${historyStore.count} 条`" tone="idle" icon="clipboard" />
-        <AppButton icon="refresh" :loading="historyStore.loading" @click="refresh">刷新</AppButton>
+        <StatusPill
+          :label="t('desktop.history.count', { count: historyStore.count })"
+          tone="idle"
+          icon="clipboard"
+        />
+        <AppButton icon="refresh" :loading="historyStore.loading" @click="refresh">
+          {{ t("common.refresh") }}
+        </AppButton>
         <AppButton
           variant="danger"
           icon="trash"
           :disabled="historyStore.count === 0"
           @click="confirmClear = true"
         >
-          清除剪贴板
+          {{ t("desktop.history.clear") }}
         </AppButton>
       </div>
     </header>
@@ -117,13 +129,13 @@ async function refresh(): Promise<void> {
             v-model="historyStore.query"
             class="cm-input"
             type="search"
-            placeholder="搜索文本内容或图片尺寸"
+            :placeholder="t('desktop.history.searchPlaceholder')"
           />
         </div>
 
-        <div class="segmented" role="tablist" aria-label="内容类型">
+        <div class="segmented" role="tablist" :aria-label="t('desktop.history.filterAria')">
           <button
-            v-for="item in filters"
+            v-for="item in FILTERS"
             :key="item.value"
             class="seg"
             :class="{ active: historyStore.filter === item.value }"
@@ -132,7 +144,7 @@ async function refresh(): Promise<void> {
             :aria-selected="historyStore.filter === item.value"
             @click="historyStore.filter = item.value"
           >
-            {{ item.label }}
+            {{ t(item.labelKey) }}
             <span class="seg-count">{{ item.count() }}</span>
           </button>
         </div>
@@ -155,19 +167,21 @@ async function refresh(): Promise<void> {
         <EmptyState
           v-else-if="isFiltering"
           icon="search"
-          title="没有匹配的条目"
-          description="换个关键词，或者把筛选切回「全部」。"
+          :title="t('desktop.history.emptyFiltered.title')"
+          :description="t('desktop.history.emptyFiltered.description')"
         >
           <template #actions>
-            <AppButton size="sm" @click="clearFilters">清除筛选</AppButton>
+            <AppButton size="sm" @click="clearFilters">
+              {{ t("desktop.history.clearFilters") }}
+            </AppButton>
           </template>
         </EmptyState>
 
         <EmptyState
           v-else
           icon="clipboard"
-          title="还没有任何历史"
-          description="开启自动同步，其他设备同步过来的内容会自动出现在这里。"
+          :title="t('desktop.history.empty.title')"
+          :description="t('desktop.history.empty.description')"
         />
       </div>
     </AppCard>
@@ -175,9 +189,9 @@ async function refresh(): Promise<void> {
     <ConfirmDialog
       :open="confirmClear"
       tone="danger"
-      title="清除剪贴板历史？"
-      :message="`将删除本机保存的 ${historyStore.count} 条记录（包含图片元数据），此操作不可恢复。已经同步到其他设备的内容不受影响。`"
-      confirm-label="清除"
+      :title="t('desktop.history.confirm.title')"
+      :message="t('desktop.history.confirm.message', { count: historyStore.count })"
+      :confirm-label="t('desktop.history.confirm.confirm')"
       :busy="clearing"
       @cancel="confirmClear = false"
       @confirm="doClear"

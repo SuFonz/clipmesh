@@ -78,6 +78,9 @@ export type ClipboardItemView =
       height: number;
     };
 
+/** 界面语言。`system` 跟随系统，其余是显式覆盖。 */
+export type LanguageSetting = "system" | "zh-CN" | "en";
+
 /** 用户设置。 */
 export interface SettingsView {
   deviceName: string;
@@ -88,6 +91,7 @@ export interface SettingsView {
   startMinimized: boolean; // 桌面：启动即最小化到托盘
   launchAtLogin: boolean; // 桌面：开机自启
   androidForegroundService: boolean; // Android：常驻前台服务
+  language: LanguageSetting; // 不认识的值在 Rust 侧退化成 "system"
 }
 
 /** 发送结果。 */

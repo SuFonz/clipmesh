@@ -11,6 +11,7 @@ import {
   FingerprintBadge,
   copyToClipboard,
   platformLabel,
+  t,
   toMessage,
   useIdentityStore,
   usePeersStore,
@@ -70,25 +71,26 @@ async function saveName(): Promise<void> {
   savingName.value = true;
   try {
     await settingsStore.setDeviceName(draftName.value);
-    toast.success("设备名已更新", "mDNS 已重新广播，其他设备会看到新名字。");
+    toast.success(t("common.toast.renamed"), t("common.toast.renamedDescription"));
   } catch (cause) {
-    toast.error("改名失败", toMessage(cause));
+    toast.error(t("common.toast.renameFailed"), toMessage(cause));
   } finally {
     savingName.value = false;
   }
 }
 
-async function copy(value: string, label: string): Promise<void> {
+/** 复制一段文本；成功文案由调用方给（设备 ID 与公钥的措辞不一样）。 */
+async function copy(value: string, successMessage: string): Promise<void> {
   const ok = await copyToClipboard(value);
-  if (ok) toast.success(`${label}已复制`);
-  else toast.error("复制失败");
+  if (ok) toast.success(successMessage);
+  else toast.error(t("common.copyFailed"));
 }
 
 function exportCert(): void {
   if (identityStore.exportCertificate()) {
-    toast.success("证书已导出", "可以把 .pem 文件发给对方，用来人工核对指纹。");
+    toast.success(t("common.toast.certExported"), t("common.toast.certExportedDescription"));
   } else {
-    toast.error("没有可导出的证书");
+    toast.error(t("common.toast.noCertificate"));
   }
 }
 </script>
@@ -101,19 +103,23 @@ function exportCert(): void {
         <header class="sec-head">
           <span class="sec-icon"><AppIcon name="phone" :size="16" /></span>
           <div class="sec-text">
-            <h2 class="sec-title">本机</h2>
-            <p class="sec-sub">名称、身份与证书</p>
+            <h2 class="sec-title">{{ t("common.thisDevice") }}</h2>
+            <p class="sec-sub">{{ t("android.home.thisDeviceSubtitle") }}</p>
           </div>
         </header>
 
         <div class="sec-grid">
-          <AppCard title="本机名称" icon="phone" subtitle="同一网络里的其他设备会看到这个名字">
+          <AppCard
+            :title="t('android.home.name.title')"
+            icon="phone"
+            :subtitle="t('android.home.name.subtitle')"
+          >
             <input
               v-model="draftName"
               class="cm-input"
               type="text"
               maxlength="64"
-              placeholder="例如：我的 Pixel"
+              :placeholder="t('android.home.name.placeholder')"
               @keydown.enter="saveName"
             />
             <AppButton
@@ -125,54 +131,72 @@ function exportCert(): void {
               :loading="savingName"
               @click="saveName"
             >
-              保存名称
+              {{ t("android.home.name.save") }}
             </AppButton>
             <p class="cm-help mt-sm">
-              当前生效：<b>{{ settingsStore.settings?.deviceName ?? statusStore.deviceName }}</b>，
-              改名后会重新广播 mDNS。
+              {{ t("common.currentName")
+              }}<b>{{ settingsStore.settings?.deviceName ?? statusStore.deviceName }}</b
+              >{{ t("common.currentNameAfter") }}
             </p>
           </AppCard>
 
-          <AppCard title="本机身份" icon="shield" subtitle="用于核对配对，不会上传到任何服务器">
+          <AppCard
+            :title="t('android.home.identity.title')"
+            icon="shield"
+            :subtitle="t('android.home.identity.subtitle')"
+          >
             <template v-if="identity">
-              <FingerprintBadge :fingerprint="identity.fingerprint" label="证书指纹" />
+              <FingerprintBadge
+                :fingerprint="identity.fingerprint"
+                :label="t('common.certificateFingerprint')"
+              />
 
               <div class="rows">
                 <div class="row">
-                  <span class="k">设备 ID</span>
+                  <span class="k">{{ t("common.deviceId") }}</span>
                   <span class="v cm-mono cm-truncate">{{ identity.deviceId }}</span>
                 </div>
                 <div class="row">
-                  <span class="k">平台</span>
+                  <span class="k">{{ t("common.platform") }}</span>
                   <span class="v">{{ platformLabel(identity.platform) }}</span>
                 </div>
                 <div class="row">
-                  <span class="k">公钥</span>
+                  <span class="k">{{ t("common.publicKey") }}</span>
                   <span class="v cm-mono cm-truncate">{{ identity.publicKey }}</span>
                 </div>
               </div>
 
               <div class="actions">
-                <AppButton block icon="copy" @click="copy(identity.deviceId, '设备 ID ')">
-                  复制设备 ID
+                <AppButton
+                  block
+                  icon="copy"
+                  @click="copy(identity.deviceId, t('common.copiedDeviceId'))"
+                >
+                  {{ t("common.copyDeviceId") }}
                 </AppButton>
-                <AppButton block icon="copy" @click="copy(identity.publicKey, '公钥')">
-                  复制公钥
+                <AppButton
+                  block
+                  icon="copy"
+                  @click="copy(identity.publicKey, t('common.copiedPublicKey'))"
+                >
+                  {{ t("common.copyPublicKey") }}
                 </AppButton>
               </div>
 
               <div class="cert">
                 <div class="cert-head">
-                  <span class="cm-label">设备证书（PEM）</span>
-                  <AppButton size="sm" icon="download" @click="exportCert">导出证书</AppButton>
+                  <span class="cm-label">{{ t("common.certificate") }}</span>
+                  <AppButton size="sm" icon="download" @click="exportCert">
+                    {{ t("common.exportCertificate") }}
+                  </AppButton>
                 </div>
                 <pre class="cm-mono cert-body">{{ identity.certificatePem }}</pre>
                 <p class="cm-help">
-                  对方应该能在自己的设备上看到同一串指纹。指纹不同 = 有人在中间，别继续。
+                  {{ t("common.fingerprintNote") }}
                 </p>
               </div>
             </template>
-            <p v-else class="cm-help">正在读取身份信息…</p>
+            <p v-else class="cm-help">{{ t("common.identityLoading") }}</p>
           </AppCard>
         </div>
       </section>
@@ -182,13 +206,18 @@ function exportCert(): void {
         <header class="sec-head">
           <span class="sec-icon"><AppIcon name="devices" :size="16" /></span>
           <div class="sec-text">
-            <h2 class="sec-title">在线设备</h2>
+            <h2 class="sec-title">{{ t("common.onlineDevices") }}</h2>
             <p class="sec-sub">
-              {{ onlinePeers.length }} 台已连接 · {{ peersStore.count }} 台被发现
+              {{
+                t("common.onlineDevicesSubtitle", {
+                  online: onlinePeers.length,
+                  discovered: peersStore.count,
+                })
+              }}
             </p>
           </div>
           <div class="sec-actions">
-            <RouterLink to="/devices" class="link">管理</RouterLink>
+            <RouterLink to="/devices" class="link">{{ t("android.home.online.manage") }}</RouterLink>
           </div>
         </header>
 
@@ -210,8 +239,8 @@ function exportCert(): void {
           <EmptyState
             compact
             icon="radar"
-            title="没有在线设备"
-            description="确认对方也开着 ClipMesh，并且在同一网络里。"
+            :title="t('common.noOnlineDevices')"
+            :description="t('android.home.online.empty.description')"
           />
         </AppCard>
       </section>

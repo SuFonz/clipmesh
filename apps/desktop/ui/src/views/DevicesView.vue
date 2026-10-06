@@ -10,6 +10,7 @@ import {
   EmptyState,
   FingerprintBadge,
   StatusPill,
+  t,
   toMessage,
   usePairingStore,
   usePeersStore,
@@ -68,9 +69,9 @@ async function refresh(): Promise<void> {
   refreshing.value = true;
   try {
     await Promise.all([peersStore.refresh(), trustedStore.refresh(), pairingStore.refresh()]);
-    toast.info("已刷新设备列表");
+    toast.info(t("desktop.devices.toast.refreshed"));
   } catch (cause) {
-    toast.error("刷新失败", toMessage(cause));
+    toast.error(t("common.refreshFailed"), toMessage(cause));
   } finally {
     refreshing.value = false;
   }
@@ -79,9 +80,12 @@ async function refresh(): Promise<void> {
 async function pair(deviceId: string): Promise<void> {
   try {
     await peersStore.pair(deviceId);
-    toast.info("已发送配对请求", "等待对方在其设备上确认指纹。");
+    toast.info(
+      t("desktop.devices.toast.pairRequested"),
+      t("desktop.devices.toast.pairRequestedDescription"),
+    );
   } catch (cause) {
-    toast.error("配对失败", toMessage(cause));
+    toast.error(t("desktop.devices.toast.pairFailed"), toMessage(cause));
   }
 }
 
@@ -90,12 +94,18 @@ async function respond(prompt: PairingPrompt, accept: boolean): Promise<void> {
   try {
     await pairingStore.respond(prompt.deviceId, accept);
     if (accept) {
-      toast.success("已接受配对", `${prompt.name} 现在可以接收你的剪贴板了。`);
+      toast.success(
+        t("desktop.devices.toast.paired"),
+        t("desktop.devices.toast.pairedDescription", { name: prompt.name }),
+      );
     } else {
-      toast.info("已拒绝配对", `${prompt.name} 不会收到任何内容。`);
+      toast.info(
+        t("desktop.devices.toast.rejected"),
+        t("desktop.devices.toast.rejectedDescription", { name: prompt.name }),
+      );
     }
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
   }
 }
 
@@ -106,9 +116,12 @@ async function respond(prompt: PairingPrompt, accept: boolean): Promise<void> {
 async function cancelOutgoing(prompt: PairingPrompt): Promise<void> {
   try {
     await pairingStore.respond(prompt.deviceId, false);
-    toast.info("已取消配对请求", `${prompt.name} 不会再收到这次请求。`);
+    toast.info(
+      t("desktop.devices.toast.cancelled"),
+      t("desktop.devices.toast.cancelledDescription", { name: prompt.name }),
+    );
   } catch (cause) {
-    toast.error("取消失败", toMessage(cause));
+    toast.error(t("desktop.devices.toast.cancelFailed"), toMessage(cause));
   }
 }
 
@@ -127,10 +140,13 @@ async function confirmUnpair(): Promise<void> {
       peer.trusted = false;
       peer.connected = false;
     }
-    toast.success("已解除信任", `${target.name} 需要重新配对才能同步。`);
+    toast.success(
+      t("desktop.devices.toast.unpaired"),
+      t("desktop.devices.toast.unpairedDescription", { name: target.name }),
+    );
     pendingUnpair.value = null;
   } catch (cause) {
-    toast.error("解除失败", toMessage(cause));
+    toast.error(t("desktop.devices.toast.unpairFailed"), toMessage(cause));
   } finally {
     unpairing.value = false;
   }
@@ -141,18 +157,26 @@ async function confirmUnpair(): Promise<void> {
   <div class="view">
     <header class="cm-page-head">
       <div>
-        <h1 class="cm-page-title">设备</h1>
+        <h1 class="cm-page-title">{{ t("desktop.nav.devices") }}</h1>
         <p class="cm-page-sub">
-          本机在 <span class="cm-mono">{{ statusStore.listenPort }}</span> 端口监听，
-          通过 mDNS 发现同一局域网内的其他 ClipMesh 节点。发现 ≠ 信任，必须先配对。
+          {{ t("desktop.devices.subtitleBefore") }}
+          <span class="cm-mono">{{ statusStore.listenPort }}</span>
+          {{ t("desktop.devices.subtitleAfter") }}
         </p>
       </div>
       <div class="cm-page-actions">
         <div class="cm-search">
           <span class="cm-search-icon"><AppIcon name="search" :size="15" /></span>
-          <input v-model="query" class="cm-input" type="search" placeholder="按名称 / 指纹 / 地址筛选" />
+          <input
+            v-model="query"
+            class="cm-input"
+            type="search"
+            :placeholder="t('desktop.devices.searchPlaceholder')"
+          />
         </div>
-        <AppButton icon="refresh" :loading="refreshing" @click="refresh">刷新</AppButton>
+        <AppButton icon="refresh" :loading="refreshing" @click="refresh">
+          {{ t("common.refresh") }}
+        </AppButton>
       </div>
     </header>
 
@@ -161,9 +185,11 @@ async function confirmUnpair(): Promise<void> {
       <AppCard
         v-if="pairingStore.incoming.length"
         tone="accent"
-        title="配对请求"
+        :title="t('desktop.devices.incoming.title')"
         icon="link"
-        :subtitle="`${pairingStore.incoming.length} 个请求等待确认`"
+        :subtitle="
+          t('desktop.devices.incoming.subtitle', { count: pairingStore.incoming.length })
+        "
       >
         <div class="requests">
           <article v-for="prompt in pairingStore.incoming" :key="prompt.deviceId" class="request">
@@ -181,7 +207,7 @@ async function confirmUnpair(): Promise<void> {
             <div class="verify">
               <FingerprintBadge
                 :fingerprint="prompt.fingerprint"
-                label="与对方屏幕核对指纹"
+                :label="t('desktop.devices.verifyFingerprint')"
                 size="lg"
               />
               <div class="prompt-actions">
@@ -191,7 +217,7 @@ async function confirmUnpair(): Promise<void> {
                   :loading="pairingStore.isBusy(prompt.deviceId)"
                   @click="respond(prompt, true)"
                 >
-                  接受
+                  {{ t("desktop.devices.accept") }}
                 </AppButton>
                 <AppButton
                   variant="ghost"
@@ -199,7 +225,7 @@ async function confirmUnpair(): Promise<void> {
                   :disabled="pairingStore.isBusy(prompt.deviceId)"
                   @click="respond(prompt, false)"
                 >
-                  拒绝
+                  {{ t("desktop.devices.reject") }}
                 </AppButton>
               </div>
             </div>
@@ -209,9 +235,11 @@ async function confirmUnpair(): Promise<void> {
 
       <AppCard
         v-if="pairingStore.outgoing.length"
-        title="我发出的请求"
+        :title="t('desktop.devices.outgoing.title')"
         icon="send"
-        :subtitle="`${pairingStore.outgoing.length} 个请求等待对方确认`"
+        :subtitle="
+          t('desktop.devices.outgoing.subtitle', { count: pairingStore.outgoing.length })
+        "
       >
         <div class="cm-list">
           <DeviceCard
@@ -234,7 +262,7 @@ async function confirmUnpair(): Promise<void> {
                 :disabled="pairingStore.isBusy(prompt.deviceId)"
                 @click="cancelOutgoing(prompt)"
               >
-                取消
+                {{ t("common.cancel") }}
               </AppButton>
             </template>
           </DeviceCard>
@@ -244,9 +272,9 @@ async function confirmUnpair(): Promise<void> {
 
     <div class="cols">
       <AppCard
-        title="发现的设备"
+        :title="t('desktop.devices.discovered.title')"
         icon="radar"
-        :subtitle="`${discovered.length} 台等待配对`"
+        :subtitle="t('desktop.devices.discovered.subtitle', { count: discovered.length })"
         tone="default"
       >
         <div v-if="discovered.length" class="cm-list">
@@ -265,7 +293,7 @@ async function confirmUnpair(): Promise<void> {
             <template #actions>
               <StatusPill
                 v-if="peer.pairing"
-                label="等待对方确认"
+                :label="t('desktop.devices.waiting')"
                 tone="accent"
                 pulse
                 size="sm"
@@ -278,7 +306,7 @@ async function confirmUnpair(): Promise<void> {
                 :loading="peersStore.isBusy(peer.deviceId)"
                 @click="pair(peer.deviceId)"
               >
-                配对
+                {{ t("desktop.devices.pair") }}
               </AppButton>
             </template>
           </DeviceCard>
@@ -287,15 +315,20 @@ async function confirmUnpair(): Promise<void> {
           v-else
           compact
           icon="radar"
-          title="没有待配对的设备"
-          description="同一局域网内的新设备会自动出现在这里。"
+          :title="t('desktop.devices.discovered.empty.title')"
+          :description="t('desktop.devices.discovered.empty.description')"
         />
       </AppCard>
 
       <AppCard
-        title="已信任的设备"
+        :title="t('desktop.devices.trusted.title')"
         icon="shield"
-        :subtitle="`${trustedStore.count} 台 · ${trustedStore.onlineCount} 台在线`"
+        :subtitle="
+          t('desktop.devices.trusted.subtitle', {
+            count: trustedStore.count,
+            online: trustedStore.onlineCount,
+          })
+        "
         tone="success"
       >
         <div v-if="trustedRows.length" class="cm-list">
@@ -319,7 +352,7 @@ async function confirmUnpair(): Promise<void> {
                 :loading="trustedStore.busyId === row.device.deviceId"
                 @click="askUnpair(row.device)"
               >
-                解除
+                {{ t("desktop.devices.unpair") }}
               </AppButton>
             </template>
           </DeviceCard>
@@ -328,8 +361,8 @@ async function confirmUnpair(): Promise<void> {
           v-else
           compact
           icon="shield"
-          title="还没有信任任何设备"
-          description="在左边找到设备并完成一次配对，之后就能互相同步剪贴板。"
+          :title="t('desktop.devices.trusted.empty.title')"
+          :description="t('desktop.devices.trusted.empty.description')"
         />
       </AppCard>
     </div>
@@ -337,9 +370,11 @@ async function confirmUnpair(): Promise<void> {
     <ConfirmDialog
       :open="pendingUnpair !== null"
       tone="danger"
-      title="解除信任？"
-      :message="`${pendingUnpair?.name ?? ''} 会被移出信任列表并断开当前会话，需要重新配对才能同步。`"
-      confirm-label="解除信任"
+      :title="t('desktop.devices.unpairDialog.title')"
+      :message="
+        t('desktop.devices.unpairDialog.message', { name: pendingUnpair?.name ?? '' })
+      "
+      :confirm-label="t('desktop.devices.unpairDialog.confirm')"
       :busy="unpairing"
       @cancel="pendingUnpair = null"
       @confirm="confirmUnpair"

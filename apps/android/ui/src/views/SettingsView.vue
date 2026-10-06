@@ -4,11 +4,15 @@ import { onMounted, ref } from "vue";
 import {
   AppCard,
   AppToggle,
+  LANGUAGE_OPTIONS,
   MAX_IMAGE_BYTES_OPTIONS,
   StatusPill,
   androidApi,
   formatMaxImageBytes,
   isMock,
+  languageLabel,
+  normalizeLanguageSetting,
+  t,
   toMessage,
   useAppVersion,
   useSettingsStore,
@@ -77,13 +81,19 @@ async function patch(changes: Partial<SettingsView>): Promise<void> {
   try {
     await settingsStore.update(changes);
   } catch (cause) {
-    toast.error("设置未保存", toMessage(cause));
+    toast.error(t("settings.saveFailed"), toMessage(cause));
   }
 }
 
 function onMaxImageBytes(event: Event): void {
   const value = Number((event.target as HTMLSelectElement).value);
   if (Number.isFinite(value)) void patch({ maxImageBytes: value });
+}
+
+/** 语言只认三种取值，收窄交给 i18n 层（与 Rust 侧同一条规则）。 */
+function onLanguage(event: Event): void {
+  const value = normalizeLanguageSetting((event.target as HTMLSelectElement).value);
+  void patch({ language: value });
 }
 
 /**
@@ -100,8 +110,8 @@ async function toggleService(value: boolean): Promise<void> {
       const granted = await androidApi.requestNotificationPermission();
       if (!granted) {
         toast.warn(
-          "没有通知权限",
-          "后台同步照常，但没有常驻通知，也收不到远程剪贴板的提醒。可以在系统设置里重新允许通知。",
+          t("settings.foreground.noPermission.title"),
+          t("settings.foreground.noPermission.description"),
         );
         // 开关必须自己回到「关」—— 它反映的是权限，不是服务在不在跑。
         await syncServiceState();
@@ -111,16 +121,19 @@ async function toggleService(value: boolean): Promise<void> {
       await androidApi.startService();
       await patch({ androidForegroundService: true });
       serviceOn.value = true;
-      toast.success("前台服务已启动", "通知栏会显示常驻通知与「广播剪贴板」按钮。");
+      toast.success(
+        t("settings.foreground.started.title"),
+        t("settings.foreground.started.description"),
+      );
       return;
     }
 
     await androidApi.stopService();
     await patch({ androidForegroundService: false });
     serviceOn.value = false;
-    toast.success("前台服务已停止");
+    toast.success(t("settings.foreground.stopped"));
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
     // 出错后以真实状态为准：开关绝不能停在「开」而服务其实没起来。
     try {
       await syncServiceState();
@@ -135,27 +148,44 @@ async function toggleService(value: boolean): Promise<void> {
 
 <template>
   <div class="view">
-    <AppCard title="同步" icon="refresh">
+    <AppCard
+      :title="t('settings.language.label')"
+      icon="settings"
+      :subtitle="t('settings.language.help')"
+    >
+      <select
+        class="cm-select"
+        :value="settingsStore.language"
+        :aria-label="t('settings.language.label')"
+        @change="onLanguage"
+      >
+        <option v-for="value in LANGUAGE_OPTIONS" :key="value" :value="value">
+          {{ languageLabel(value) }}
+        </option>
+      </select>
+    </AppCard>
+
+    <AppCard :title="t('settings.sync.title')" icon="refresh">
       <AppToggle
         :model-value="settingsStore.settings?.autoSync ?? false"
-        label="后台自动同步"
-        description="剪贴板变化时自动推送。"
+        :label="t('settings.autoSync.label')"
+        :description="t('settings.autoSync.descriptionMobile')"
         @update:model-value="(v: boolean) => patch({ autoSync: v })"
       />
       <AppToggle
         :model-value="settingsStore.settings?.syncText ?? false"
-        label="同步文本"
+        :label="t('settings.syncText.label')"
         @update:model-value="(v: boolean) => patch({ syncText: v })"
       />
       <AppToggle
         :model-value="settingsStore.settings?.syncImages ?? false"
-        label="同步图片"
-        description="移动网络下建议关掉，图片可能很大。"
+        :label="t('settings.syncImages.label')"
+        :description="t('settings.syncImages.descriptionMobile')"
         @update:model-value="(v: boolean) => patch({ syncImages: v })"
       />
 
       <label class="cm-field mt">
-        <span class="cm-label">图片大小上限</span>
+        <span class="cm-label">{{ t("settings.maxImageBytes.label") }}</span>
         <select
           class="cm-select"
           :value="settingsStore.settings?.maxImageBytes ?? 0"
@@ -166,41 +196,48 @@ async function toggleService(value: boolean): Promise<void> {
           </option>
         </select>
         <span class="cm-help">
-          当前上限 {{ formatMaxImageBytes(settingsStore.settings?.maxImageBytes ?? 0) }}，超过的图片会被跳过。
+          {{
+            t("settings.maxImageBytes.helpCurrent", {
+              size: formatMaxImageBytes(settingsStore.settings?.maxImageBytes ?? 0),
+            })
+          }}
         </span>
       </label>
     </AppCard>
 
-    <AppCard v-if="serviceAvailable" title="后台常驻" icon="bell" subtitle="前台服务 + 通知">
+    <AppCard
+      v-if="serviceAvailable"
+      :title="t('settings.foreground.title')"
+      icon="bell"
+      :subtitle="t('settings.foreground.subtitle')"
+    >
       <AppToggle
         :model-value="serviceOn"
         :disabled="serviceBusy"
-        label="常驻前台服务"
-        description="保持后台运行，通知栏会显示常驻通知与「广播剪贴板」按钮。"
+        :label="t('settings.foreground.label')"
+        :description="t('settings.foreground.description')"
         @update:model-value="toggleService"
       />
       <p class="cm-help mt-sm">
-        这个开关跟着通知权限走：权限被拒绝时它是关的，前台服务也会停掉 —— 没有通知权限就没有常驻通知，
-        也收不到远程剪贴板提醒。打开时会申请一次权限（系统里已经允许过就不再弹框）；
-        被拒绝的话再点一次可以重新申请。
+        {{ t("settings.foreground.help") }}
       </p>
     </AppCard>
 
-    <AppCard title="关于" icon="info">
+    <AppCard :title="t('settings.about.title')" icon="info">
       <div class="about">
         <span>ClipMesh {{ version ?? "—" }}</span>
         <StatusPill
-          :label="mock ? '浏览器 MOCK' : 'Tauri 运行时'"
+          :label="mock ? t('settings.about.mock') : t('settings.about.tauri')"
           :tone="mock ? 'warn' : 'ok'"
           size="sm"
         />
       </div>
       <p class="cm-help mt-sm">
-        无中心服务器，设备之间直接通过 TLS 通信。当前监听端口
-        {{ statusStore.listenPort }}。
+        {{ t("settings.about.body", { port: statusStore.listenPort }) }}
       </p>
       <p class="cm-help mt-sm">
-        以 MIT 许可证发布，全文见仓库根目录的 <span class="cm-mono">LICENSE</span>。
+        {{ t("settings.about.licenseBefore") }}
+        <span class="cm-mono">LICENSE</span>{{ t("settings.about.licenseAfter") }}
       </p>
     </AppCard>
   </div>

@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import { clearError as clearErrorCommand, getStatus, startEngine, stopEngine } from "../api/commands";
+import { t } from "../i18n";
 import type { Platform, StatusView } from "../types";
 
 /**
@@ -17,7 +18,7 @@ export const useStatusStore = defineStore("status", () => {
   const running = computed<boolean>(() => status.value?.running ?? false);
   const autoSync = computed<boolean>(() => status.value?.autoSync ?? false);
   const deviceId = computed<string>(() => status.value?.deviceId ?? "");
-  const deviceName = computed<string>(() => status.value?.deviceName ?? "本机");
+  const deviceName = computed<string>(() => status.value?.deviceName ?? t("common.thisDevice"));
   const platform = computed<Platform>(() => status.value?.platform ?? "unknown");
   const fingerprint = computed<string>(() => status.value?.fingerprint ?? "");
   const listenPort = computed<number>(() => status.value?.listenPort ?? 0);
@@ -98,5 +99,5 @@ export const useStatusStore = defineStore("status", () => {
 export function toMessage(cause: unknown): string {
   if (typeof cause === "string") return cause;
   if (cause instanceof Error) return cause.message;
-  return "未知错误";
+  return t("common.unknownError");
 }

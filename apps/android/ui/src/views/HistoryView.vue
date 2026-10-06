@@ -10,12 +10,14 @@ import {
   EmptyState,
   StatusPill,
   summarizeItem,
+  t,
   toMessage,
   useHistoryStore,
   usePeersStore,
   useToast,
   type ClipboardItemView,
   type HistoryFilter,
+  type MessageKey,
 } from "@clipmesh/ui-core";
 
 /**
@@ -28,10 +30,11 @@ const toast = useToast();
 const confirmClear = ref(false);
 const clearing = ref(false);
 
-const filters: Array<{ value: HistoryFilter; label: string; count: () => number }> = [
-  { value: "all", label: "全部", count: () => historyStore.count },
-  { value: "text", label: "文本", count: () => historyStore.textCount },
-  { value: "image", label: "图片", count: () => historyStore.imageCount },
+/** 筛选按钮上存的是文案键 —— 数组在模块加载时建好，文字要等渲染时再取。 */
+const FILTERS: Array<{ value: HistoryFilter; labelKey: MessageKey; count: () => number }> = [
+  { value: "all", labelKey: "android.history.filter.all", count: () => historyStore.count },
+  { value: "text", labelKey: "android.history.filter.text", count: () => historyStore.textCount },
+  { value: "image", labelKey: "android.history.filter.image", count: () => historyStore.imageCount },
 ];
 
 const list = computed(() => historyStore.filtered);
@@ -45,18 +48,18 @@ function clearFilters(): void {
 async function onCopy(item: ClipboardItemView): Promise<void> {
   try {
     await historyStore.copy(item.id);
-    toast.success("已复制到剪贴板", summarizeItem(item, 40));
+    toast.success(t("android.history.toast.copied"), summarizeItem(item, 40));
   } catch (cause) {
-    toast.error("复制失败", toMessage(cause));
+    toast.error(t("common.copyFailed"), toMessage(cause));
   }
 }
 
 async function onResend(item: ClipboardItemView): Promise<void> {
   try {
     const result = await historyStore.resend(item.id);
-    toast.success(`已重发（${result.delivered} 台设备）`);
+    toast.success(t("android.history.toast.resent", { count: result.delivered }));
   } catch (cause) {
-    toast.error("重发失败", toMessage(cause));
+    toast.error(t("android.history.toast.resendFailed"), toMessage(cause));
   }
 }
 
@@ -65,9 +68,9 @@ async function doClear(): Promise<void> {
   try {
     await historyStore.clear();
     confirmClear.value = false;
-    toast.success("历史已清空");
+    toast.success(t("android.history.toast.cleared"));
   } catch (cause) {
-    toast.error("清空失败", toMessage(cause));
+    toast.error(t("android.history.toast.clearFailed"), toMessage(cause));
   } finally {
     clearing.value = false;
   }
@@ -79,13 +82,18 @@ async function doClear(): Promise<void> {
     <div class="bar">
       <div class="cm-search">
         <span class="cm-search-icon"><AppIcon name="search" :size="15" /></span>
-        <input v-model="historyStore.query" class="cm-input" type="search" placeholder="搜索历史" />
+        <input
+          v-model="historyStore.query"
+          class="cm-input"
+          type="search"
+          :placeholder="t('android.history.searchPlaceholder')"
+        />
       </div>
       <AppButton
         icon="trash"
         variant="danger"
         icon-only
-        title="清空历史"
+        :title="t('android.history.clearTitle')"
         :disabled="historyStore.count === 0"
         @click="confirmClear = true"
       />
@@ -93,14 +101,14 @@ async function doClear(): Promise<void> {
 
     <div class="chips">
       <button
-        v-for="item in filters"
+        v-for="item in FILTERS"
         :key="item.value"
         class="chip"
         :class="{ active: historyStore.filter === item.value }"
         type="button"
         @click="historyStore.filter = item.value"
       >
-        {{ item.label }}
+        {{ t(item.labelKey) }}
         <span class="chip-count">{{ item.count() }}</span>
       </button>
     </div>
@@ -124,32 +132,39 @@ async function doClear(): Promise<void> {
         v-if="isFiltering"
         compact
         icon="search"
-        title="没有匹配的条目"
-        description="换个关键词试试。"
+        :title="t('android.history.emptyFiltered.title')"
+        :description="t('android.history.emptyFiltered.description')"
       >
         <template #actions>
-          <AppButton size="sm" @click="clearFilters">清除筛选</AppButton>
+          <AppButton size="sm" @click="clearFilters">
+            {{ t("android.history.clearFilters") }}
+          </AppButton>
         </template>
       </EmptyState>
       <EmptyState
         v-else
         compact
         icon="clipboard"
-        title="还没有历史"
-        description="收到的剪贴板会自动出现在这里。"
+        :title="t('android.history.empty.title')"
+        :description="t('android.history.empty.description')"
       />
     </AppCard>
 
     <div class="tail">
-      <StatusPill :label="`共 ${historyStore.count} 条`" tone="idle" icon="clipboard" size="sm" />
+      <StatusPill
+        :label="t('android.history.count', { count: historyStore.count })"
+        tone="idle"
+        icon="clipboard"
+        size="sm"
+      />
     </div>
 
     <ConfirmDialog
       :open="confirmClear"
       tone="danger"
-      title="清空全部历史？"
-      :message="`将删除本机保存的 ${historyStore.count} 条记录，无法恢复。`"
-      confirm-label="清空"
+      :title="t('android.history.confirm.title')"
+      :message="t('android.history.confirm.message', { count: historyStore.count })"
+      :confirm-label="t('android.history.confirm.confirm')"
       :busy="clearing"
       @cancel="confirmClear = false"
       @confirm="doClear"

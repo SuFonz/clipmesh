@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import { useRelativeTime } from "../composables/useRelativeTime";
+import { t } from "../i18n";
 import type { Platform } from "../types";
 import { platformLabel } from "../utils/format";
 import AppIcon from "./AppIcon.vue";
@@ -54,10 +55,10 @@ const { format } = useRelativeTime();
 const icon = computed(() => PLATFORM_ICONS[props.platform] ?? "unknown");
 const platformText = computed<string>(() => platformLabel(props.platform));
 const stateLabel = computed<string>(() => {
-  if (props.pairing) return "配对中";
-  if (props.online) return "已连接";
-  if (props.trusted) return "离线";
-  return "已发现";
+  if (props.pairing) return t("components.device.pairing");
+  if (props.online) return t("components.device.connected");
+  if (props.trusted) return t("components.device.offline");
+  return t("components.device.discovered");
 });
 const stateTone = computed<"ok" | "warn" | "idle" | "accent">(() => {
   if (props.pairing) return "accent";
@@ -83,7 +84,7 @@ const lastSeenText = computed<string>(() =>
         <StatusPill :label="stateLabel" :tone="stateTone" size="sm" />
         <StatusPill
           v-if="trusted"
-          label="已信任"
+          :label="t('components.device.trusted')"
           tone="ok"
           icon="shield"
           size="sm"

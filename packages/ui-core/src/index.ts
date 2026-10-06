@@ -21,6 +21,7 @@ export type {
   EventName,
   EventPayload,
   IdentityView,
+  LanguageSetting,
   PairingDirection,
   PairingPrompt,
   PeerView,
@@ -52,6 +53,24 @@ export { useCoreEvents, type CoreEventsHandle } from "./composables/useCoreEvent
 export { MOBILE_BREAKPOINT, useDeviceType, type DeviceType, type DeviceTypeInfo } from "./composables/useDeviceType";
 export { useRelativeTime, type RelativeTime } from "./composables/useRelativeTime";
 export { useToast, type Toast, type ToastTone } from "./composables/useToast";
+
+/* --- i18n --- */
+export {
+  LANGUAGE_OPTIONS,
+  applyLanguageSetting,
+  currentLanguageSetting,
+  languageLabel,
+  locale,
+  normalizeLanguageSetting,
+  resolveSystemLocale,
+  t,
+  useI18n,
+  type MessageEntry,
+  type MessageKey,
+  type MessageLocale,
+  type MessageParams,
+  type MessageTable,
+} from "./i18n";
 
 /* --- 工具 --- */
 export {

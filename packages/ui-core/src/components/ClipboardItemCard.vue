@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 
 import { useRelativeTime } from "../composables/useRelativeTime";
+import { t } from "../i18n";
 import type { ClipboardItemView } from "../types";
 import { formatBytes } from "../utils/format";
 import AppButton from "./AppButton.vue";
@@ -56,9 +57,14 @@ const imageMeta = computed<string>(() =>
     : "",
 );
 const imageAlt = computed<string>(() =>
-  props.item.kind === "image" ? `剪贴板图片 ${props.item.width}×${props.item.height}` : "剪贴板图片",
+  props.item.kind === "image"
+    ? t("components.clipboardItem.imageAlt", {
+        width: props.item.width,
+        height: props.item.height,
+      })
+    : t("components.clipboardItem.imageAltPlain"),
 );
-const source = computed<string>(() => props.sourceName ?? "未知设备");
+const source = computed<string>(() => props.sourceName ?? t("common.unknownDevice"));
 const time = computed<string>(() => format(props.item.timestamp));
 </script>
 
@@ -73,7 +79,7 @@ const time = computed<string>(() => format(props.item.timestamp));
         <span class="dot">·</span>
         <time class="time" :datetime="new Date(item.timestamp).toISOString()">{{ time }}</time>
       </div>
-      <span v-if="highlight" class="new">新</span>
+      <span v-if="highlight" class="new">{{ t("components.clipboardItem.new") }}</span>
     </header>
 
     <div class="body">
@@ -83,7 +89,11 @@ const time = computed<string>(() => format(props.item.timestamp));
         </p>
         <button v-if="needsExpand" class="more" type="button" @click="expanded = !expanded">
           <AppIcon :name="expanded ? 'chevron-down' : 'chevron-right'" :size="13" />
-          {{ expanded ? "收起" : `展开全部（${textContent.length} 字符）` }}
+          {{
+            expanded
+              ? t("components.clipboardItem.collapse")
+              : t("components.clipboardItem.expand", { count: textContent.length })
+          }}
         </button>
       </template>
 
@@ -92,7 +102,7 @@ const time = computed<string>(() => format(props.item.timestamp));
           <img v-if="thumbnail" :src="thumbnail" :alt="imageAlt" />
           <span v-else class="thumb-placeholder">
             <AppIcon name="image" :size="20" />
-            <span>缩略图加载中…</span>
+            <span>{{ t("components.clipboardItem.thumbnailLoading") }}</span>
           </span>
         </div>
         <p class="image-meta cm-mono">{{ imageMeta }}</p>
@@ -105,10 +115,10 @@ const time = computed<string>(() => format(props.item.timestamp));
         variant="ghost"
         icon="copy"
         :disabled="busy"
-        title="复制到本机剪贴板（不发送）"
+        :title="t('components.clipboardItem.copyTitle')"
         @click="emit('copy', item)"
       >
-        复制
+        {{ t("components.clipboardItem.copy") }}
       </AppButton>
       <AppButton
         size="sm"
@@ -116,10 +126,10 @@ const time = computed<string>(() => format(props.item.timestamp));
         icon="send"
         :disabled="busy"
         :loading="busy"
-        title="重新发送到所有在线设备"
+        :title="t('components.clipboardItem.resendTitle')"
         @click="emit('resend', item)"
       >
-        重发
+        {{ t("components.clipboardItem.resend") }}
       </AppButton>
     </footer>
   </article>

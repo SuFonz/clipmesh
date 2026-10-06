@@ -13,6 +13,7 @@ import {
   copyToClipboard,
   platformLabel,
   sendClipboard,
+  t,
   toMessage,
   useIdentityStore,
   usePeersStore,
@@ -58,26 +59,27 @@ async function saveName(): Promise<void> {
   savingName.value = true;
   try {
     await settingsStore.setDeviceName(draftName.value);
-    toast.success("设备名已更新", "mDNS 已重新广播，其他设备会看到新名字。");
+    toast.success(t("common.toast.renamed"), t("common.toast.renamedDescription"));
   } catch (cause) {
-    toast.error("改名失败", toMessage(cause));
+    toast.error(t("common.toast.renameFailed"), toMessage(cause));
   } finally {
     savingName.value = false;
   }
 }
 
-async function copy(value: string, label: string): Promise<void> {
+/** 复制一段文本；成功文案由调用方给（设备 ID 与公钥的措辞不一样）。 */
+async function copy(value: string, successMessage: string): Promise<void> {
   const ok = await copyToClipboard(value);
-  if (ok) toast.success(`${label}已复制`);
-  else toast.error("复制失败");
+  if (ok) toast.success(successMessage);
+  else toast.error(t("common.copyFailed"));
 }
 
 async function exportCert(): Promise<void> {
   const ok = identityStore.exportCertificate();
   if (ok) {
-    toast.success("证书已导出", "可以把 .pem 文件发给对方，用来人工核对指纹。");
+    toast.success(t("common.toast.certExported"), t("common.toast.certExportedDescription"));
   } else {
-    toast.error("没有可导出的证书");
+    toast.error(t("common.toast.noCertificate"));
   }
 }
 
@@ -86,13 +88,16 @@ async function toggleEngine(): Promise<void> {
   try {
     if (statusStore.running) {
       await statusStore.stop();
-      toast.info("引擎已停止", "不再监听剪贴板，也不再响应局域网请求。");
+      toast.info(t("desktop.engine.stoppedToast"), t("desktop.engine.stoppedDescription"));
     } else {
       await statusStore.start();
-      toast.success("引擎已启动", "正在监听剪贴板并接受局域网连接。");
+      toast.success(
+        t("desktop.engine.startedToast"),
+        t("desktop.home.toast.engineStartedDescription"),
+      );
     }
   } catch (cause) {
-    toast.error("操作失败", toMessage(cause));
+    toast.error(t("common.actionFailed"), toMessage(cause));
   } finally {
     togglingEngine.value = false;
   }
@@ -109,12 +114,15 @@ async function sendLocalClipboard(): Promise<void> {
   try {
     const result = await sendClipboard();
     if (result.delivered > 0) {
-      toast.success("已发送剪贴板", `投递到 ${result.delivered} 台在线设备`);
+      toast.success(
+        t("desktop.home.toast.sent"),
+        t("desktop.home.toast.sentDescription", { count: result.delivered }),
+      );
     } else {
-      toast.warn("没有在线设备", "内容已留在历史里，等设备上线后可重发。");
+      toast.warn(t("common.noOnlineDevices"), t("common.toast.noOnlineDevices.description"));
     }
   } catch (cause) {
-    toast.error("发送失败", toMessage(cause));
+    toast.error(t("desktop.home.toast.sendFailed"), toMessage(cause));
   } finally {
     sendingClipboard.value = false;
   }
@@ -130,7 +138,7 @@ async function dismissError(): Promise<void> {
   try {
     await statusStore.clearError();
   } catch (cause) {
-    toast.error("无法清除这条错误", toMessage(cause));
+    toast.error(t("desktop.home.toast.clearErrorFailed"), toMessage(cause));
   }
 }
 </script>
@@ -139,20 +147,24 @@ async function dismissError(): Promise<void> {
   <div class="view">
     <header class="cm-page-head">
       <div>
-        <h1 class="cm-page-title">首页</h1>
+        <h1 class="cm-page-title">{{ t("desktop.nav.home") }}</h1>
         <p class="cm-page-sub">
           {{ statusStore.deviceName }} ·
-          {{ statusStore.running ? "引擎运行中" : "引擎已停止" }} ·
-          {{ onlinePeers.length }} 台设备在线
+          {{ statusStore.running ? t("desktop.home.engineRunning") : t("desktop.home.engineStopped") }}
+          · {{ t("desktop.home.devicesOnline", { count: onlinePeers.length }) }}
         </p>
       </div>
       <div class="cm-page-actions">
         <StatusPill
-          :label="statusStore.running ? '运行中' : '已停止'"
+          :label="statusStore.running ? t('desktop.status.running') : t('desktop.status.stopped')"
           :tone="statusStore.running ? 'ok' : 'idle'"
           :pulse="statusStore.running"
         />
-        <StatusPill :label="`发现 ${peersStore.count}`" tone="info" icon="radar" />
+        <StatusPill
+          :label="t('desktop.home.discovered', { count: peersStore.count })"
+          tone="info"
+          icon="radar"
+        />
         <AppButton
           variant="primary"
           icon="send"
@@ -160,7 +172,7 @@ async function dismissError(): Promise<void> {
           :disabled="sendingClipboard"
           @click="sendLocalClipboard"
         >
-          发送剪贴板
+          {{ t("desktop.home.sendClipboard") }}
         </AppButton>
         <AppButton
           :variant="statusStore.running ? 'secondary' : 'primary'"
@@ -168,7 +180,7 @@ async function dismissError(): Promise<void> {
           :loading="togglingEngine"
           @click="toggleEngine"
         >
-          {{ statusStore.running ? "停止引擎" : "启动引擎" }}
+          {{ statusStore.running ? t("desktop.engine.stopTitle") : t("desktop.engine.startTitle") }}
         </AppButton>
       </div>
     </header>
@@ -176,7 +188,9 @@ async function dismissError(): Promise<void> {
     <div v-if="statusStore.lastError" class="banner" role="alert">
       <AppIcon name="alert" :size="16" />
       <span class="banner-text">{{ statusStore.lastError }}</span>
-      <AppButton size="sm" variant="ghost" @click="dismissError">知道了</AppButton>
+      <AppButton size="sm" variant="ghost" @click="dismissError">
+        {{ t("desktop.home.dismissError") }}
+      </AppButton>
     </div>
 
     <div class="sections">
@@ -185,22 +199,26 @@ async function dismissError(): Promise<void> {
         <header class="sec-head">
           <span class="sec-icon"><AppIcon name="monitor" :size="16" /></span>
           <div class="sec-text">
-            <h2 class="sec-title">本机</h2>
-            <p class="sec-sub">身份、证书与运行状态</p>
+            <h2 class="sec-title">{{ t("common.thisDevice") }}</h2>
+            <p class="sec-sub">{{ t("desktop.home.thisDeviceSubtitle") }}</p>
           </div>
         </header>
 
         <div class="sec-grid">
-          <AppCard title="本机身份" icon="key" subtitle="长期保存，卸载重装会重新生成">
+          <AppCard
+            :title="t('desktop.home.identity.title')"
+            icon="key"
+            :subtitle="t('desktop.home.identity.subtitle')"
+          >
             <div class="field-row">
               <label class="cm-field grow">
-                <span class="cm-label">设备名</span>
+                <span class="cm-label">{{ t("common.deviceName") }}</span>
                 <input
                   v-model="draftName"
                   class="cm-input"
                   type="text"
                   maxlength="64"
-                  placeholder="例如：书房的台式机"
+                  :placeholder="t('desktop.home.identity.deviceNamePlaceholder')"
                   @keydown.enter="saveName"
                 />
               </label>
@@ -211,69 +229,82 @@ async function dismissError(): Promise<void> {
                 :loading="savingName"
                 @click="saveName"
               >
-                保存
+                {{ t("common.save") }}
               </AppButton>
             </div>
             <p class="cm-help name-help">
-              当前生效：<b>{{ settingsStore.settings?.deviceName ?? statusStore.deviceName }}</b>，
-              改名后会重新广播 mDNS。
+              {{ t("common.currentName")
+              }}<b>{{ settingsStore.settings?.deviceName ?? statusStore.deviceName }}</b
+              >{{ t("common.currentNameAfter") }}
             </p>
 
             <div v-if="identity" class="identity">
-              <FingerprintBadge :fingerprint="identity.fingerprint" label="证书指纹" size="lg" />
+              <FingerprintBadge
+                :fingerprint="identity.fingerprint"
+                :label="t('common.certificateFingerprint')"
+                size="lg"
+              />
 
               <div class="kv">
-                <span class="k">设备 ID</span>
+                <span class="k">{{ t("common.deviceId") }}</span>
                 <span class="v cm-mono">{{ identity.deviceId }}</span>
                 <AppButton
                   size="sm"
                   variant="ghost"
                   icon="copy"
                   icon-only
-                  title="复制设备 ID"
-                  @click="copy(identity.deviceId, '设备 ID ')"
+                  :title="t('common.copyDeviceId')"
+                  @click="copy(identity.deviceId, t('common.copiedDeviceId'))"
                 />
               </div>
 
               <div class="kv">
-                <span class="k">平台</span>
+                <span class="k">{{ t("common.platform") }}</span>
                 <span class="v">{{ platformLabel(identity.platform) }}</span>
               </div>
 
               <div class="kv">
-                <span class="k">公钥</span>
+                <span class="k">{{ t("common.publicKey") }}</span>
                 <span class="v cm-mono clamp">{{ identity.publicKey }}</span>
                 <AppButton
                   size="sm"
                   variant="ghost"
                   icon="copy"
                   icon-only
-                  title="复制公钥"
-                  @click="copy(identity.publicKey, '公钥')"
+                  :title="t('common.copyPublicKey')"
+                  @click="copy(identity.publicKey, t('common.copiedPublicKey'))"
                 />
               </div>
 
               <div class="cert">
                 <div class="cert-head">
-                  <span class="cm-label">设备证书（PEM）</span>
-                  <AppButton size="sm" icon="download" @click="exportCert">导出证书</AppButton>
+                  <span class="cm-label">{{ t("common.certificate") }}</span>
+                  <AppButton size="sm" icon="download" @click="exportCert">
+                    {{ t("common.exportCertificate") }}
+                  </AppButton>
                 </div>
                 <pre class="cm-mono cert-body">{{ identity.certificatePem }}</pre>
                 <p class="cm-help">
-                  对方应该能在自己的设备上看到同一串指纹。指纹不同 = 有人在中间，别继续。
+                  {{ t("common.fingerprintNote") }}
                 </p>
               </div>
             </div>
-            <div v-else class="loading">正在读取身份信息…</div>
+            <div v-else class="loading">{{ t("common.identityLoading") }}</div>
           </AppCard>
 
-          <AppCard title="运行状态" icon="radar" subtitle="监听端口与同步情况">
+          <AppCard
+            :title="t('desktop.home.runtime.title')"
+            icon="radar"
+            :subtitle="t('desktop.home.runtime.subtitle')"
+          >
             <div class="stats">
               <div class="stat">
-                <span class="k">引擎</span>
+                <span class="k">{{ t("common.engine") }}</span>
                 <span class="v">
                   <StatusPill
-                    :label="statusStore.running ? '运行中' : '已停止'"
+                    :label="
+                      statusStore.running ? t('desktop.status.running') : t('desktop.status.stopped')
+                    "
                     :tone="statusStore.running ? 'ok' : 'idle'"
                     :pulse="statusStore.running"
                     size="sm"
@@ -281,27 +312,34 @@ async function dismissError(): Promise<void> {
                 </span>
               </div>
               <div class="stat">
-                <span class="k">监听端口</span>
+                <span class="k">{{ t("common.listenPort") }}</span>
                 <span class="v cm-mono">{{ statusStore.listenPort }}</span>
               </div>
               <div class="stat">
-                <span class="k">自动同步</span>
+                <span class="k">{{ t("common.autoSync") }}</span>
                 <span class="v">
                   <StatusPill
-                    :label="statusStore.autoSync ? '已开启' : '已关闭'"
+                    :label="
+                      statusStore.autoSync
+                        ? t('desktop.home.runtime.autoSyncOn')
+                        : t('desktop.home.runtime.autoSyncOff')
+                    "
                     :tone="statusStore.autoSync ? 'ok' : 'idle'"
                     size="sm"
                   />
                 </span>
               </div>
               <div class="stat">
-                <span class="k">已信任设备</span>
-                <span class="v">{{ statusStore.trustedPeers }} 台</span>
+                <span class="k">{{ t("desktop.home.runtime.trustedDevices") }}</span>
+                <span class="v">{{
+                  t("desktop.home.runtime.deviceCount", { count: statusStore.trustedPeers })
+                }}</span>
               </div>
             </div>
             <p class="cm-help stats-help">
-              自动同步、图片大小上限等开关在<RouterLink to="/settings" class="link">设置</RouterLink
-              >里调整。
+              {{ t("desktop.home.runtime.settingsHintBefore")
+              }}<RouterLink to="/settings" class="link">{{ t("desktop.nav.settings") }}</RouterLink
+              >{{ t("desktop.home.runtime.settingsHintAfter") }}
             </p>
           </AppCard>
         </div>
@@ -312,13 +350,18 @@ async function dismissError(): Promise<void> {
         <header class="sec-head">
           <span class="sec-icon"><AppIcon name="devices" :size="16" /></span>
           <div class="sec-text">
-            <h2 class="sec-title">在线设备</h2>
+            <h2 class="sec-title">{{ t("common.onlineDevices") }}</h2>
             <p class="sec-sub">
-              {{ onlinePeers.length }} 台已连接 · {{ peersStore.count }} 台被发现
+              {{
+                t("common.onlineDevicesSubtitle", {
+                  online: onlinePeers.length,
+                  discovered: peersStore.count,
+                })
+              }}
             </p>
           </div>
           <div class="sec-actions">
-            <RouterLink to="/devices" class="link">管理设备</RouterLink>
+            <RouterLink to="/devices" class="link">{{ t("desktop.home.online.manage") }}</RouterLink>
           </div>
         </header>
 
@@ -340,8 +383,8 @@ async function dismissError(): Promise<void> {
           <EmptyState
             compact
             icon="radar"
-            title="当前没有在线设备"
-            description="同一局域网里完成配对的设备上线后，会自动出现在这里。"
+            :title="t('desktop.home.online.empty.title')"
+            :description="t('desktop.home.online.empty.description')"
           />
         </AppCard>
       </section>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
+import { t } from "../i18n";
 import AppButton from "./AppButton.vue";
 import AppIcon from "./AppIcon.vue";
 
@@ -20,8 +21,10 @@ const props = withDefaults(
   }>(),
   {
     message: undefined,
-    confirmLabel: "确认",
-    cancelLabel: "取消",
+    // 默认值不能写成字面量：那样就定在模块加载时的语言上了。留空，用下面的
+    // computed 兜底，切语言时按钮会跟着变。
+    confirmLabel: undefined,
+    cancelLabel: undefined,
     tone: "default",
     busy: false,
   },
@@ -31,6 +34,9 @@ const emit = defineEmits<{
   (e: "confirm"): void;
   (e: "cancel"): void;
 }>();
+
+const confirmText = computed<string>(() => props.confirmLabel ?? t("common.confirm"));
+const cancelText = computed<string>(() => props.cancelLabel ?? t("common.cancel"));
 
 const panel = ref<HTMLElement | null>(null);
 
@@ -85,14 +91,14 @@ onBeforeUnmount(() => {
 
           <div class="actions">
             <AppButton variant="ghost" :disabled="busy" @click="emit('cancel')">
-              {{ cancelLabel }}
+              {{ cancelText }}
             </AppButton>
             <AppButton
               :variant="tone === 'danger' ? 'danger' : 'primary'"
               :loading="busy"
               @click="emit('confirm')"
             >
-              {{ confirmLabel }}
+              {{ confirmText }}
             </AppButton>
           </div>
         </div>

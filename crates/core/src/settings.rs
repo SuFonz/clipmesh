@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use clipmesh_protocol::MAX_IMAGE_BYTES;
 
@@ -22,6 +22,63 @@ pub const MAX_IMAGE_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
 
 /// Largest history a user may configure.
 pub const MAX_HISTORY_CAPACITY: usize = 500;
+
+/// Interface language.
+///
+/// The wire/storage tags are the stable ones the UI speaks (`system`, `zh-CN`,
+/// `en`), not the Rust variant names, so renaming a variant cannot silently
+/// migrate anyone's `settings.json`.
+///
+/// The *type* is the validation: there is no fourth state to clamp away.
+/// [`Language::from_tag`] maps every unrecognised tag (`"fr"`, `"ja"`, or a
+/// value from a newer build) to [`Language::System`], so a hand-edited file
+/// degrades instead of failing the whole `Settings::load` — the same "never let
+/// an out-of-range value in, but never brick the file either" rule the numeric
+/// fields follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Language {
+    /// Follow the operating system / browser locale. Resolved in the frontend.
+    #[default]
+    System,
+    /// Simplified Chinese.
+    Chinese,
+    /// English.
+    English,
+}
+
+impl Language {
+    /// The stable tag stored in `settings.json` and sent over IPC.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Chinese => "zh-CN",
+            Self::English => "en",
+        }
+    }
+
+    /// Narrow a tag to a known language; anything else becomes [`Self::System`].
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Self {
+        match tag {
+            "zh-CN" => Self::Chinese,
+            "en" => Self::English,
+            _ => Self::System,
+        }
+    }
+}
+
+impl Serialize for Language {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.tag())
+    }
+}
+
+impl<'de> Deserialize<'de> for Language {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_tag(&String::deserialize(deserializer)?))
+    }
+}
 
 /// Everything the user can change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +102,8 @@ pub struct Settings {
     pub android_foreground_service: bool,
     /// How many clipboard entries to keep.
     pub history_capacity: usize,
+    /// Interface language: `system` follows the OS, otherwise an explicit tag.
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -59,6 +118,7 @@ impl Default for Settings {
             launch_at_login: false,
             android_foreground_service: true,
             history_capacity: crate::sync::DEFAULT_HISTORY_CAPACITY,
+            language: Language::System,
         }
     }
 }
@@ -130,6 +190,9 @@ impl Settings {
         if let Some(value) = patch.history_capacity {
             self.history_capacity = value;
         }
+        if let Some(value) = patch.language {
+            self.language = value;
+        }
 
         self.clamp();
         *self != before
@@ -140,6 +203,10 @@ impl Settings {
     /// Called after loading and after every patch, because this file is
     /// user-editable and a `maxImageBytes` of zero would silently disable
     /// images with no explanation in the UI.
+    ///
+    /// `language` is deliberately absent here: [`Language`] has no
+    /// out-of-range value to fix, because unknown tags already collapse to
+    /// [`Language::System`] while deserialising.
     pub fn clamp(&mut self) {
         self.max_image_bytes = self
             .max_image_bytes
@@ -189,6 +256,8 @@ pub struct SettingsPatch {
     pub android_foreground_service: Option<bool>,
     /// New history capacity.
     pub history_capacity: Option<usize>,
+    /// New interface language.
+    pub language: Option<Language>,
 }
 
 impl SettingsPatch {
@@ -204,6 +273,7 @@ impl SettingsPatch {
             && self.launch_at_login.is_none()
             && self.android_foreground_service.is_none()
             && self.history_capacity.is_none()
+            && self.language.is_none()
     }
 }
 
@@ -322,5 +392,71 @@ mod tests {
         assert_eq!(settings.history_capacity, MAX_HISTORY_CAPACITY);
         // Fields absent from the file keep their defaults.
         assert!(settings.auto_sync);
+    }
+
+    #[test]
+    fn language_defaults_to_following_the_system() {
+        assert_eq!(Settings::default().language, Language::System);
+        // Absent from the file => same default, so an old settings.json keeps working.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"autoSync": false}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().language, Language::System);
+    }
+
+    #[test]
+    fn language_round_trips_through_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+
+        let mut settings = Settings::default();
+        settings.language = Language::English;
+        settings.save(&path).unwrap();
+
+        // The file carries the stable tag, not the Rust variant name.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(r#""language": "en""#), "unexpected file: {raw}");
+        assert_eq!(Settings::load(&path).unwrap().language, Language::English);
+
+        settings.language = Language::Chinese;
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().language, Language::Chinese);
+    }
+
+    #[test]
+    fn an_unknown_language_never_gets_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"language": "fr"}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().language, Language::System);
+
+        // A patch is narrowed by the same rule: known tags pass through,
+        // anything else degrades to `system` instead of reaching the file.
+        let known: SettingsPatch = serde_json::from_str(r#"{"language":"zh-CN"}"#).unwrap();
+        assert_eq!(known.language, Some(Language::Chinese));
+        let unknown: SettingsPatch = serde_json::from_str(r#"{"language":"klingon"}"#).unwrap();
+        assert_eq!(unknown.language, Some(Language::System));
+    }
+
+    #[test]
+    fn changing_the_language_is_reported_as_a_change() {
+        let mut settings = Settings::default();
+        settings.language = Language::Chinese;
+
+        assert!(!settings.apply(&SettingsPatch {
+            language: Some(Language::Chinese),
+            ..SettingsPatch::default()
+        }));
+        assert!(settings.apply(&SettingsPatch {
+            language: Some(Language::English),
+            ..SettingsPatch::default()
+        }));
+        assert_eq!(settings.language, Language::English);
+        assert!(settings.sync_images, "other fields must be untouched");
+        assert!(!SettingsPatch {
+            language: Some(Language::System),
+            ..SettingsPatch::default()
+        }
+        .is_empty());
     }
 }

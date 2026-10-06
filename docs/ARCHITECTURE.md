@@ -1,36 +1,39 @@
-# ClipMesh 架构设计
+# ClipMesh Architecture
 
-> 本文对应 `doc.txt` 的 **Phase 1：完整架构设计和模块职责**。
-> 阅读顺序建议：§1 设计不变量 → §3 模块划分 → §4 安全模型 → §5 数据流。
+**English** | [简体中文](ARCHITECTURE.zh-CN.md)
+
+> This document covers **Phase 1: complete architecture design and module responsibilities** from `doc.txt`.
+> Suggested reading order: §1 Design invariants → §3 Module breakdown → §4 Security model → §5 Data flow.
 
 ---
 
-## 1. 设计不变量
+## 1. Design invariants
 
-这五条是硬约束，任何实现细节都必须服从它们：
+These five are hard constraints; every implementation detail must obey them:
 
-| # | 不变量 | 落地方式 |
+| # | Invariant | How it is enforced |
 | --- | --- | --- |
-| 1 | **无中心服务器** | 没有 broker、没有中转、没有账号体系。设备通过 mDNS 互相发现，直连 TCP。 |
-| 2 | **所有设备平等** | 没有 client/server 角色。TLS 双向认证，两端都既是监听方也是连接方，冲突时用 deviceId 字典序决定谁主动重连。 |
-| 3 | **数据只在设备间传输** | 任何 payload 不经过第三方；凭据、证书、私钥永不离开本机。 |
-| 4 | **第一版必须加密 + 信任** | TLS 1.3 双向认证 + Ed25519 设备身份 + 显式配对。没有"以后再加"的开关。 |
-| 5 | **Rust Core 与平台无关** | `crates/**` 不依赖 Tauri / Vue / Win32 / Android API，可在任意平台编译和测试。 |
+| 1 | **No central server** | No broker, no relay, no account system. Devices discover each other over mDNS and connect over direct TCP. |
+| 2 | **All devices are equal** | There is no client/server role. TLS mutual authentication; both ends listen and both ends connect, and on collision deviceId lexicographic order decides who redials. |
+| 3 | **Data only travels between devices** | No payload passes through a third party; credentials, certificates and private keys never leave the local machine. |
+| 4 | **v1 must be encrypted + trusted** | TLS 1.3 mutual authentication + Ed25519 device identity + explicit pairing. There is no "add it later" switch. |
+| 5 | **The Rust Core is platform-independent** | `crates/**` does not depend on Tauri / Vue / Win32 / Android APIs, and compiles and tests on any platform. |
 
 ---
 
-## 2. 总体架构
+## 2. Overall architecture
 
 ```
                     ┌──────────────────────────────┐
                     │   Vue 3 + TypeScript (UI)    │
-                    │   桌面：侧边导航 / 多栏       │
-                    │   移动：底部标签 / 单列       │
+                    │  Desktop: side nav / columns │
+                    │  Mobile: bottom tabs / list  │
                     └───────────────┬──────────────┘
                                     │ invoke / event  (docs/IPC.md)
                     ┌───────────────┴──────────────┐
                     │        Tauri 2 Runtime       │
-                    │  窗口 · 托盘 · 自启 · 命令层  │
+                    │   window · tray · autostart  │
+                    │   command layer              │
                     └───────────────┬──────────────┘
                                     │ Arc<SyncManager>
 ┌───────────────────────────────────┴───────────────────────────────────┐
@@ -44,302 +47,336 @@
         │                     │                     │
 ┌───────┴────────┐  ┌─────────┴──────────┐  ┌───────┴────────────┐
 │clipmesh-       │  │ clipmesh-network   │  │ clipmesh-identity  │
-│clipboard       │  │ mDNS + TCP + TLS   │  │ Ed25519 + 证书     │
-│arboard / JNI   │  │                    │  │ + 信任库           │
+│clipboard       │  │ mDNS + TCP + TLS   │  │ Ed25519 + certs    │
+│arboard / JNI   │  │                    │  │ + trust store      │
 └────────────────┘  └─────────┬──────────┘  └───────┬────────────┘
-                            │                     │
-                  ┌─────────┴──────────┐  ┌───────┴────────────┐
-                  │ clipmesh-security  │  │ clipmesh-protocol  │
-                  │ rustls 配置/校验    │  │ protobuf + 分帧     │
-                  └────────────────────┘  └────────────────────┘
+                              │                     │
+                    ┌─────────┴──────────┐  ┌───────┴────────────┐
+                    │ clipmesh-security  │  │ clipmesh-protocol  │
+                    │ rustls config /    │  │ protobuf + framing │
+                    │ verification       │  │                    │
+                    └────────────────────┘  └────────────────────┘
 ```
 
-**依赖方向严格单向**（无环）：
+**The dependency direction is strictly one-way** (acyclic):
 
 ```
 protocol ← identity ← security ← core ← { clipboard, network } ← apps/*
 ```
 
-`core` 只依赖 trait，**不依赖** `clipboard` / `network` 的具体实现。
-具体的 arboard、mdns-sd、rustls 只在 `apps/*` 的组装代码里被 new 出来并注入。
+`core` depends only on traits and **not** on the concrete `clipboard` / `network` implementations.
+The concrete arboard, mdns-sd and rustls objects are only created and injected in the wiring code under `apps/*`.
 
-这样做的直接收益：引擎可以用假 provider 做单元测试，且换一个平台只需要实现三个 trait。
-
----
-
-## 3. 模块职责
-
-### 3.1 `crates/protocol` — 线上契约
-
-| 文件 | 职责 |
-| --- | --- |
-| `schema/clipmesh.proto` | protobuf3 定义。所有消息的**唯一**事实来源。 |
-| `build.rs` | 用 `protox`（纯 Rust 编译器）编译 proto，**不需要 protoc 二进制**。 |
-| `src/frame.rs` | 4 字节大端长度前缀分帧；读取前先校验长度上限，拒绝恶意超大帧。 |
-| `src/message.rs` | `Envelope` 构造器与版本校验；`MessageKind` 分类。 |
-| `src/clipboard.rs` | 强类型 payload 模型：`TextPayload` / `ImageMeta` / `ImagePayload`，包含大小上限与 sha256 校验。 |
-| `src/device.rs` | `DeviceId`(UUIDv4) / `Platform` / `DeviceInfo`。 |
-
-**为什么 payload 模型放在 protocol 而不是 core**：它是线上格式的 Rust 视图，
-把它和 protobuf 放在一起，才能保证"改协议"和"改类型"永远发生在同一次提交里。
-
-### 3.2 `crates/identity` — 设备身份
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/key.rs` | Ed25519 长期密钥对。私钥以 PKCS#8 存储，文件权限 0600。 |
-| `src/certificate.rs` | 用 `rcgen` 生成**自签名 X.509**（CN = deviceId，SAN = `clipmesh.local`），导出 DER/PEM。 |
-| `src/fingerprint.rs` | `sha256(cert DER)` → `A1B2 C3D4 …` 分组可读格式。 |
-| `src/trust.rs` | 信任库：已配对设备的 JSON 持久化，原子写入。 |
-
-设备身份在**首次启动**时生成并长期保存，包含 `deviceId` / `publicKey` / `privateKey`。
-私钥只在本机，`publicKey` 用于身份验证。
-
-### 3.3 `crates/security` — 传输安全
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/crypto.rs` | 签名/验签的领域封装：`sign_hello` / `verify_hello` / `sign_pair_accept`，域分隔前缀防重放。 |
-| `src/tls.rs` | rustls 配置：两种策略 `TrustPolicy::Pairing`（接受未知设备，用于首次配对）与 `TrustPolicy::Strict`（只接受信任库内的指纹）。自定义 `ClientCertVerifier` / `ServerCertVerifier`。 |
-| `src/session.rs` | 会话状态机 `TcpConnected → TlsEstablished → IdentityVerified → Active`，以及 TLS 通道绑定（exporter secret）。 |
-
-### 3.4 `crates/core` — 同步引擎
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/provider.rs` | 三个 trait：`ClipboardProvider` / `NetworkProvider` / `IdentityProvider`。 |
-| `src/sync.rs` | `DedupCache`（去重）、`EchoSuppressor`（回声抑制）、`SyncPolicy`、`History`。 |
-| `src/device.rs` | `DeviceRegistry`：谁在线、谁在配对。**不存信任状态**，信任只存在于信任库。 |
-| `src/manager.rs` | `SyncManager`：编排发现、连接、握手、收发、配对、事件广播。 |
-| `src/event.rs` | 面向 UI 的快照事件与视图类型。 |
-
-### 3.5 `crates/network` — 发现与传输
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/discovery.rs` | mDNS 广播与浏览（`_clipmesh._tcp.local.`），TXT 记录携带 `deviceId` / `name` / `platform` / `port` / `fp`。 |
-| `src/tcp.rs` | 监听与连接，端口选择与冲突重试。 |
-| `src/tls.rs` | 用 identity + security 组装 `TlsAcceptor` / `TlsConnector`。 |
-| `src/connection.rs` | 单条会话的读写任务、握手、心跳、图片分片收发。 |
-| `src/packet.rs` | 会话内的消息路由与 ACK。 |
-
-### 3.6 `crates/clipboard` — 平台剪贴板
-
-`ClipboardProvider` 的各平台实现：`windows.rs` / `linux.rs` / `macos.rs` / `android.rs`。
-桌面统一走 `arboard`（文本 + 图片），Windows 额外用 `GetClipboardSequenceNumber` 做廉价变更检测。
-Android 不直接调用系统 API，而是通过注入的 `AndroidClipboardHost` 把请求转给 Kotlin 插件——
-这样 `clipmesh-clipboard` 依然与平台无关，可以被桌面编译。
+The immediate payoff: the engine can be unit-tested with fake providers, and supporting another platform only means implementing three traits.
 
 ---
 
-## 4. 安全模型
+## 3. Module responsibilities
 
-### 4.1 威胁模型
+### 3.1 `crates/protocol` — the wire contract
 
-| 威胁 | 对策 |
+| File | Responsibility |
 | --- | --- |
-| 局域网内窃听 | TLS 1.3，全部流量加密。 |
-| 中间人替换设备 | 证书指纹固定 + 应用层签名挑战绑定 TLS 通道（见 4.3）。 |
-| 未授权设备读取剪贴板 | 默认只接受信任库内设备的会话；未配对设备仅能发 `PairRequest`。 |
-| 设备身份伪造 | 身份 = Ed25519 公钥，`Hello` 必须用对应私钥签名，且签名绑定到当前 TLS 通道。 |
-| 重放旧消息 | 每个 payload 带 UUID，接收方用 `DedupCache` 丢弃重复；握手挑战是一次性 32 字节随机数。 |
-| 恶意超大帧耗尽内存 | 分帧层在分配前校验 16 MiB 上限（`MAX_FRAME_BYTES`）。 |
-| 图片损坏/篡改 | `ClipboardImage.sha256`，写入剪贴板前校验。 |
+| `schema/clipmesh.proto` | protobuf3 definition. The **single** source of truth for all messages. |
+| `build.rs` | Compiles the proto with `protox` (a pure-Rust compiler); **no protoc binary required**. |
+| `src/frame.rs` | 4-byte big-endian length-prefix framing; the length cap is checked before reading, rejecting malicious oversized frames. |
+| `src/message.rs` | `Envelope` constructor and version checks; `MessageKind` classification. |
+| `src/clipboard.rs` | Strongly-typed payload models: `TextPayload` / `ImageMeta` / `ImagePayload`, including size caps and sha256 verification. |
+| `src/device.rs` | `DeviceId`(UUIDv4) / `Platform` / `DeviceInfo`. |
 
-### 4.2 配对流程
+**Why the payload models live in protocol rather than core**: they are the Rust view of the wire format,
+and keeping them next to the protobuf is the only way to guarantee that "change the protocol" and "change the types" always happen in the same commit.
+
+### 3.2 `crates/identity` — device identity
+
+| File | Responsibility |
+| --- | --- |
+| `src/key.rs` | Ed25519 long-term key pair. The private key is stored as PKCS#8 with file permissions 0600. |
+| `src/certificate.rs` | Uses `rcgen` to generate a **self-signed X.509** (CN = deviceId, SAN = `clipmesh.local`), exported as DER/PEM. |
+| `src/fingerprint.rs` | `sha256(cert DER)` → `A1B2 C3D4 …` grouped, human-readable format. |
+| `src/trust.rs` | Trust store: JSON persistence of paired devices, atomic writes. |
+
+Device identity is generated on **first launch** and kept long-term; it contains `deviceId` / `publicKey` / `privateKey`.
+The private key stays on the local machine only; `publicKey` is used for authentication.
+
+### 3.3 `crates/security` — transport security
+
+| File | Responsibility |
+| --- | --- |
+| `src/crypto.rs` | Domain wrapper around signing/verification: `sign_hello` / `verify_hello` / `sign_pair_accept`, with domain-separation prefixes to prevent replay. |
+| `src/tls.rs` | rustls configuration: two policies, `TrustPolicy::Pairing` (accepts unknown devices, used for first-time pairing) and `TrustPolicy::Strict` (accepts only fingerprints from the trust store). Custom `ClientCertVerifier` / `ServerCertVerifier`. |
+| `src/session.rs` | Session state machine `TcpConnected → TlsEstablished → IdentityVerified → Active`, plus TLS channel binding (exporter secret). |
+
+### 3.4 `crates/core` — sync engine
+
+| File | Responsibility |
+| --- | --- |
+| `src/provider.rs` | The three traits: `ClipboardProvider` / `NetworkProvider` / `IdentityProvider`. |
+| `src/sync.rs` | `DedupCache` (deduplication), `EchoSuppressor` (echo suppression), `SyncPolicy`, `History`. |
+| `src/device.rs` | `DeviceRegistry`: who is online, who is pairing. It does **not store trust state**; trust exists only in the trust store. |
+| `src/manager.rs` | `SyncManager`: orchestrates discovery, connection, handshake, send/receive, pairing and event broadcast. |
+| `src/event.rs` | UI-facing snapshot events and view types. |
+
+### 3.5 `crates/network` — discovery and transport
+
+| File | Responsibility |
+| --- | --- |
+| `src/discovery.rs` | mDNS advertise and browse (`_clipmesh._tcp.local.`); TXT records carry `deviceId` / `name` / `platform` / `port` / `fp`. |
+| `src/tcp.rs` | Listening and connecting, port selection and conflict retry. |
+| `src/tls.rs` | Assembles `TlsAcceptor` / `TlsConnector` from identity + security. |
+| `src/connection.rs` | Read/write tasks for a single session, handshake, heartbeat, image chunk send/receive. |
+| `src/packet.rs` | Message routing and ACK within a session. |
+
+### 3.6 `crates/clipboard` — platform clipboard
+
+The per-platform implementations of `ClipboardProvider`: `windows.rs` / `linux.rs` / `macos.rs` / `android.rs`.
+Desktop goes through `arboard` everywhere (text + images); Windows additionally uses `GetClipboardSequenceNumber` for cheap change detection.
+Android does not call the system API directly — an injected `AndroidClipboardHost` forwards requests to the Kotlin plugin,
+so `clipmesh-clipboard` stays platform-independent and can still be compiled on desktop.
+
+---
+
+## 4. Security model
+
+### 4.1 Threat model
+
+| Threat | Countermeasure |
+| --- | --- |
+| Eavesdropping on the LAN | TLS 1.3, all traffic encrypted. |
+| Man-in-the-middle replacing a device | Certificate fingerprint pinning + an application-layer signature challenge bound to the TLS channel (see 4.3). |
+| Unauthorized device reading the clipboard | By default only sessions from devices in the trust store are accepted; an unpaired device can only send `PairRequest`. |
+| Device identity spoofing | Identity = the Ed25519 public key, `Hello` must be signed with the matching private key, and the signature is bound to the current TLS channel. |
+| Replaying old messages | Every payload carries a UUID and the receiver drops duplicates with `DedupCache`; the handshake challenge is a one-time 32-byte random value. |
+| Malicious oversized frame exhausting memory | The framing layer checks the 16 MiB cap (`MAX_FRAME_BYTES`) before allocating. |
+| Corrupted or tampered images | `ClipboardImage.sha256`, verified before writing to the clipboard. |
+
+### 4.2 Pairing flow
 
 ```
-A 发现 B (mDNS)
+A discovers B (mDNS)
   ↓
-A 建立 TCP + TLS（此时用 Pairing 策略：接受未知证书，但记录指纹）
+A establishes TCP + TLS (the Pairing policy is used here: unknown certificates are accepted, but the fingerprint is recorded)
   ↓
 A → PairRequest { deviceId, name, platform, publicKey, certificate, fingerprint, nonce }
   ↓
-B 弹出确认框：设备名 / 平台 / 证书指纹 + [接受] [拒绝]
+B pops up a confirmation dialog: device name / platform / certificate fingerprint + [Accept] [Reject]
   ↓
-B 接受 → PairAccept { ..., signature = sign(nonce ‖ B.deviceId) }
+B accepts → PairAccept { ..., signature = sign(nonce ‖ B.deviceId) }
   ↓
-双方写入信任库：
+Both sides write to the trust store:
   TrustedDevice { deviceId, name, publicKey, certificate, fingerprint, trustedAt }
 ```
 
-指纹的**带外比对**（两块屏幕对照）才是真正的安全边界；
-签名只是保证"接受"这个动作确实来自持有该私钥的设备，而不是被局域网里的第三方伪造。
+The **out-of-band comparison** of the fingerprints (two screens side by side) is the real security boundary;
+the signature only guarantees that the act of "accepting" really came from the device holding that private key,
+rather than being forged by a third party on the LAN.
 
-### 4.3 通道绑定（防中继）
+### 4.3 Channel binding (anti-relay)
 
-握手时双方各自生成 32 字节 `challenge`，签名内容为：
+During the handshake each side generates a 32-byte `challenge`, and the signed content is:
 
 ```
 sha256( "clipmesh-hello-v1" ‖ challenge ‖ channel_binding )
 ```
 
-其中 `channel_binding = TLS exporter secret`（`export_keying_material(b"EXPORTER-clipmesh-identity")`）。
-exporter secret 只有这条 TLS 连接的两端能算出，因此攻击者无法把 A 的 `Hello`
-原样转发到另一条连接上冒充 A —— 这挡住了"TCP 层中继"这一整类攻击。
+where `channel_binding = TLS exporter secret` (`export_keying_material(b"EXPORTER-clipmesh-identity")`).
+Only the two ends of this TLS connection can compute the exporter secret, so an attacker cannot forward A's `Hello`
+verbatim onto another connection and impersonate A there — this blocks the whole class of "TCP-layer relay" attacks.
 
-### 4.4 连接状态机
+### 4.4 Connection state machine
 
 ```
 TCP Connect
    ↓
-TLS Handshake（双向认证，两侧都出示自签证书）
+TLS Handshake (mutual authentication, both sides present a self-signed certificate)
    ↓
-Certificate 验证（自签名合法性 + 指纹策略）
+Certificate verification (self-signed validity + fingerprint policy)
    ↓
-Device Identity 验证（Hello 签名 + 通道绑定）
+Device Identity verification (Hello signature + channel binding)
    ↓
-建立 Session（写入连接表，开始投递 payload）
+Establish the Session (write into the connection table, start delivering payloads)
    ↓
-传输数据
+Transfer data
 ```
 
-任何一步失败 → 发送 `ErrorMessage` 并关闭连接，绝不降级为明文。
+Failure at any step → send an `ErrorMessage` and close the connection; never downgrade to plaintext.
 
 ---
 
-## 5. 数据流
+## 5. Data flow
 
-### 5.1 本地复制 → 远端（发送路径）
+### 5.1 Local copy → remote (send path)
 
 ```
-系统剪贴板变化
+System clipboard changes
   ↓ ClipboardProvider::watch()
-EchoSuppressor 判断是不是我们自己刚写进去的 → 是则丢弃
+EchoSuppressor decides whether this is something we just wrote ourselves → if so, drop it
   ↓
-SyncPolicy 允许？（auto_sync / sync_text / sync_images / 大小）
+Does SyncPolicy allow it? (auto_sync / sync_text / sync_images / size)
   ↓
-构造 TextPayload(id = UUIDv4) 或 ImageMeta(sha256)
-  ↓ 记入 DedupCache（自己的 id 也记，防止对端回传）
+Build TextPayload(id = UUIDv4) or ImageMeta(sha256)
+  ↓ record it in DedupCache (our own id as well, so the peer cannot bounce it back)
 NetworkProvider::broadcast(Envelope)
   ↓
-每个在线且已信任的会话：TLS 写入分帧
-  ↓ 图片：ClipboardImage 元数据帧 + N × ImageChunk(64 KiB) 二进制分片
-UI 事件 clipmesh://clipboard-sent { item, delivered }
+Every online and trusted session: TLS framed write
+  ↓ images: ClipboardImage metadata frame + N × ImageChunk(64 KiB) binary chunks
+UI event clipmesh://clipboard-sent { item, delivered }
 ```
 
-### 5.2 远端 → 本地（接收路径）
+### 5.2 Remote → local (receive path)
 
 ```
-TLS 读到 Envelope
+TLS reads an Envelope
   ↓
-Envelope::ensure_valid()（协议版本 + payload 存在）
+Envelope::ensure_valid() (protocol version + payload present)
   ↓
-会话已通过 Identity 验证？否则只允许 PairRequest
+Has the session passed Identity verification? If not, only PairRequest is allowed
   ↓
-DedupCache::insert(id) → 已见过则直接丢弃（这就是防环的关键）
+DedupCache::insert(id) → already seen, drop it (this is the key to loop prevention)
   ↓
-图片：收齐所有分片 → 拼接 → meta.verify(&data) 校验 sha256
+Images: collect every chunk → reassemble → meta.verify(&data) checks the sha256
   ↓
 EchoSuppressor::record_write(&content)
 ClipboardProvider::write(&content)
   ↓
-UI 事件 clipmesh://clipboard-received { item }
+UI event clipmesh://clipboard-received { item }
 ```
 
-### 5.3 防环说明
+### 5.3 Loop prevention
 
-两个都开着自动同步的设备会互相回弹同一条内容。三重防护：
+Two devices that both have auto-sync on will bounce the same item back at each other. Three layers of protection:
 
-1. **id 去重**：Origin 生成 UUID，任何设备处理过一次就不再处理（`DedupCache`）。
-2. **回声抑制**：写入本机剪贴板前记录内容签名（kind + len + sha256），
-   10 秒内匹配到同签名的变化视为自己造成的回声（`EchoSuppressor`）。
-3. **不回传 origin**：`source_device` 等于本机的 payload 直接丢弃。
+1. **id dedup**: the origin generates a UUID, and no device processes it a second time (`DedupCache`).
+2. **Echo suppression**: before writing to the local clipboard, the content signature (kind + len + sha256) is recorded;
+   a change matching that signature within 10 seconds counts as an echo we caused ourselves (`EchoSuppressor`).
+3. **Never send back to the origin**: a payload whose `source_device` is the local device is dropped immediately.
 
-### 5.4 为什么 v1 不做中继转发
+### 5.4 Why v1 does not relay
 
-payload 直接广播给**每一个已连接且已信任**的设备，不做存储转发、不做多跳中继。
+A payload is broadcast directly to **every connected and trusted** device: no store-and-forward, no multi-hop relaying.
 
-理由：局域网内每台设备都通过 mDNS 发现其他所有设备，A→C 的直连一定存在，
-中继只会在"某些设备之间连不上"时才有意义（那是跨网段场景，v1 不在范围内）；
-而一旦引入中继，"这条 payload 是谁转发的、能不能信"就变成一个需要重新论证的问题。
+Rationale: on a LAN every device discovers every other device over mDNS, so a direct A→C link always exists;
+relaying would only be meaningful when "some devices cannot reach each other" (that is the cross-subnet case, out of scope for v1);
+and once relaying is introduced, "who forwarded this payload, and can it be trusted" becomes a question that has to be argued from scratch.
 
-代价是三台设备时会产生 A→B、A→C 两条连接而不是一条链，
-在局域网上这比中继更快也更简单。`DedupCache` 依然必需 ——
-对端把我们的 payload 回弹回来是真实存在的失败模式。
+The cost is that with three devices you get two links, A→B and A→C, instead of one chain —
+on a LAN that is faster and simpler than relaying. `DedupCache` is still required:
+a peer bouncing our payload back is a real failure mode.
 
-### 5.5 谁主动连接
+### 5.5 Who dials
 
-两端都会发现对方，若同时发起就会出现两条会话。规则：
-**deviceId 字典序较小的一方主动拨号**，另一方只监听。
-`SyncManager` 在收到 `Discovered` 事件时按这条规则决定是否调用 `connect()`。
+Both ends discover each other, and dialling at the same time would produce two sessions. The rule:
+**the side with the smaller deviceId dials**, the other side only listens.
+When `SyncManager` receives a `Discovered` event it applies this rule to decide whether to call `connect()`.
 
 ---
 
-## 6. 平台实现
+## 6. Platform implementations
 
-### 6.1 Desktop（`apps/desktop`）
+### 6.1 Desktop (`apps/desktop`)
 
-| 层 | 职责 |
+| Layer | Responsibility |
 | --- | --- |
-| Rust | 剪贴板监听、TCP/TLS、mDNS、身份验证、后台运行 |
-| Tauri | 窗口、系统托盘、设置、开机自启 |
-| Vue | `DesktopLayout`：侧边导航 + 多栏 + 状态栏 |
+| Rust | Clipboard watching, TCP/TLS, mDNS, identity verification, background operation |
+| Tauri | Window, system tray, settings, launch at login |
+| Vue | `DesktopLayout`: side navigation + multiple columns + status bar |
 
-托盘菜单：显示主窗口 / 立即广播剪贴板 / 暂停自动同步 / 退出。
+Tray menu: show main window / broadcast clipboard now / pause auto-sync / quit.
 
-### 6.2 Android（`apps/android`）
+### 6.2 Android (`apps/android`)
 
-Android 的后台限制要求把常驻能力放进原生插件：
+Android's background restrictions require the resident capabilities to live in a native plugin:
 
 ```
 Vue → Tauri → Rust → Android Native Plugin → Android API
 ```
 
-插件三块（`apps/android/plugins/bridge/`）：
+The plugin has three parts (`apps/android/plugins/bridge/`):
 
-| 目录 | 职责 |
+| Directory | Responsibility |
 | --- | --- |
-| `foregroundservice/` | 常驻前台服务，维持进程与网络会话；通知栏常驻，带「广播剪贴板」按钮。 |
-| `notification/` | 通知的构造与投递：常驻服务通知与「收到剪贴板」通知。 |
-| `broadcast/` | 透明 Activity 与进程级 handoff：通知按钮把剪贴板读出来交给 Rust，界面不出现；读不到时回退到可见路径。 |
-| `clipboard/` | `ClipboardManager` 读写；Android 10+ 后台读剪贴板受限，因此广播由用户点击通知按钮**主动触发**。 |
+| `foregroundservice/` | Resident foreground service that keeps the process and the network sessions alive; a persistent notification with a "broadcast clipboard" button. |
+| `notification/` | Building and posting notifications: the foreground-service notification and the "clipboard received" notification. |
+| `broadcast/` | Transparent Activity and process-level handoff: the notification button reads the clipboard and hands it to Rust without any UI appearing; falls back to a visible path when the read fails. |
+| `clipboard/` | `ClipboardManager` reads and writes; on Android 10+ background clipboard reads are restricted, so a broadcast is **triggered explicitly** by the user tapping the notification button. |
 
-Android 上 Rust 不直接调 `ClipboardManager`，而是通过 `AndroidClipboardHost` trait
-把请求交给 Kotlin 实现，保持 `crates/**` 的平台无关性。
+On Android, Rust does not call `ClipboardManager` directly; it hands requests to the Kotlin implementation through the
+`AndroidClipboardHost` trait, which keeps `crates/**` platform-independent.
+
+### 6.3 UI language (`packages/ui-core/src/i18n/`)
+
+The UI supports two languages, `zh-CN` / `en`. **No i18n library is pulled in**: the whole UI needs only "two tables + one lookup function",
+and hand-writing one is smaller and more controllable than dragging in vue-i18n.
+
+```
+settings.json ──language──▶ Settings (Rust) ──get_settings──▶ settings store
+                                                                  │ applyLanguageSetting()
+                                                                  ▼
+                                       i18n module's locale ref ──▶ every t() call site
+```
+
+Four rules:
+
+1. **Persistence goes through the existing settings**, not `localStorage`. `Settings.language` only ever takes
+   `system` / `zh-CN` / `en`; on the Rust side `Language::from_tag` narrows any unrecognised tag to
+   `system` (the same idea as clamping `history_capacity`: never introduce a fourth value, and never let the file brick the app).
+2. **`system` is resolved in the frontend**: only the first entry of `navigator.language` is looked at; anything starting
+   with `zh` counts as Chinese, everything else as English. The later entries of `navigator.languages` are deliberately
+   ignored — that is a preference list, and it does not mean the UI should use that language.
+3. **Message tables are split by domain** (`messages/{common,settings,components,desktop,android}.ts`),
+   `catalog.ts` assembles them into one table, `MessageKey = keyof typeof catalog`.
+   Every message gives both languages in the same object literal, so **omitting one is a compile error**;
+   `t()` only accepts `MessageKey`, so a mistyped key is likewise a compile error rather than a blank at runtime.
+4. **Switching is live**: `locale` is a `computed`, `t()` reads it inside templates / `computed`s,
+   and the affected fragments re-render automatically when the language changes — no refresh needed.
+
+Convention: **any new user-visible text must go into the message tables**; do not leave literals in components.
+Code comments stay in Chinese (repository convention), and developer diagnostics such as `console.*` / `tracing` are not translated.
+Route titles store a **message key** (`meta.title`) rather than a finished sentence — when vue-router merges the `meta`
+of nested routes it flattens the values, so a stored string would stay frozen at module-load time forever.
 
 ---
 
-## 7. 目录结构
+## 7. Directory structure
 
 ```
 clipmesh/
 ├── Cargo.toml                 # Rust workspace
-├── package.json               # npm workspaces 根
+├── package.json               # npm workspaces root
 ├── crates/
-│   ├── protocol/              # protobuf + 分帧 + payload 模型
-│   ├── identity/              # Ed25519 / 证书 / 指纹 / 信任库
-│   ├── security/              # rustls 配置 / 校验器 / 会话
-│   ├── core/                  # 引擎：trait、去重、设备表、编排
+│   ├── protocol/              # protobuf + framing + payload models
+│   ├── identity/              # Ed25519 / certificates / fingerprints / trust store
+│   ├── security/              # rustls config / verifiers / session
+│   ├── core/                  # engine: traits, dedup, device table, orchestration
 │   ├── network/               # mDNS + TCP + TLS
-│   └── clipboard/             # 各平台剪贴板实现
-├── packages/ui-core/          # 共享前端：类型 / store / API / 通用组件
+│   └── clipboard/             # per-platform clipboard implementations
+├── packages/ui-core/          # shared frontend: types / store / API / i18n / common components
 ├── apps/
-│   ├── desktop/{src-tauri,ui} # 桌面 Tauri 宿主 + 桌面布局
+│   ├── desktop/{src-tauri,ui} # desktop Tauri host + desktop layout
 │   └── android/
-│       ├── src-tauri/         # 移动 Tauri 宿主
-│       ├── ui/                # 移动布局
+│       ├── src-tauri/         # mobile Tauri host
+│       ├── ui/                # mobile layout
 │       └── plugins/bridge/{clipboard,notification,foregroundservice}
 └── docs/
 ```
 
-> 与 `doc.txt` 的两点差异，均为 Tauri 2 的实际约束：
-> 1. `packages/ui-core/` 是为了让两端"共享数据模型/状态管理/API/通用组件"而不用复制代码；
->    两个 app 各自保留 `layouts/` 与 `views/`，因为两套布局本来就不一样。
-> 2. Android 端 `gen/android` 由 `tauri android init` 生成并纳入版本库，
->    原生插件以独立 Gradle module 形式被 `settings.gradle` 引入。
+> Two differences from `doc.txt`, both forced by Tauri 2's actual constraints:
+> 1. `packages/ui-core/` exists so that both ends can "share the data model / state management / API / common components" without copying code;
+>    the two apps each keep their own `layouts/` and `views/`, because the two layouts were never the same to begin with.
+> 2. On Android, `gen/android` is generated by `tauri android init` and checked into version control,
+>    and the native plugin is pulled in by `settings.gradle` as a standalone Gradle module.
 
 ---
 
-## 8. 阶段对照
+## 8. Phase map
 
-| 阶段 | 内容 | 产物 |
+| Phase | Content | Deliverable |
 | --- | --- | --- |
-| Phase 1 | 架构设计 | 本文档 |
-| Phase 2 | protobuf 协议 | `crates/protocol`（27 个单元测试） |
-| Phase 3 | identity + TLS | `crates/identity`、`crates/security` |
-| Phase 4 | Rust Core | `crates/core`、`crates/clipboard` |
+| Phase 1 | Architecture design | This document |
+| Phase 2 | protobuf protocol | `crates/protocol` (27 unit tests) |
+| Phase 3 | identity + TLS | `crates/identity`, `crates/security` |
+| Phase 4 | Rust Core | `crates/core`, `crates/clipboard` |
 | Phase 5 | mDNS + TCP + TLS | `crates/network` |
-| Phase 6 | 桌面端 | `apps/desktop` |
+| Phase 6 | Desktop | `apps/desktop` |
 | Phase 7 | Android + Native Plugin | `apps/android` |
-| Phase 8 | 测试/优化/打包 | `docs/BUILD.md`、CI |
+| Phase 8 | Testing / optimization / packaging | `docs/BUILD.md`, CI |

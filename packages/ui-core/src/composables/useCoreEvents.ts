@@ -1,6 +1,7 @@
 import { onBeforeUnmount, onMounted } from "vue";
 
 import { listenEvent } from "../api/transport";
+import { t } from "../i18n";
 import { useHistoryStore } from "../stores/history";
 import { useIdentityStore } from "../stores/identity";
 import { usePairingStore } from "../stores/pairing";
@@ -55,9 +56,13 @@ export function useCoreEvents(): CoreEventsHandle {
     const failed = results.filter((r) => r.status === "rejected");
     if (failed.length > 0) {
       const first = failed[0];
-      const message = first && first.status === "rejected" ? toMessage(first.reason) : "未知错误";
+      const message =
+        first && first.status === "rejected" ? toMessage(first.reason) : t("common.unknownError");
       statusStore.setError(message);
-      toast.error("初始化失败", `${failed.length} 个接口没有响应：${message}`);
+      toast.error(
+        t("common.toast.initFailed.title"),
+        t("common.toast.initFailed.description", { count: failed.length, message }),
+      );
     }
   }
 
@@ -80,19 +85,25 @@ export function useCoreEvents(): CoreEventsHandle {
       }),
       listenEvent("clipmesh://clipboard-received", (payload) => {
         historyStore.prepend(payload);
-        toast.info("收到剪贴板", summarizeItem(payload, 64));
+        toast.info(t("common.toast.received.title"), summarizeItem(payload, 64));
       }),
       listenEvent("clipmesh://clipboard-sent", (payload) => {
         const { delivered } = payload;
         if (delivered > 0) {
-          toast.success("已发送", `投递到 ${delivered} 台在线设备`);
+          toast.success(
+            t("common.toast.sent.title"),
+            t("common.toast.sent.description", { count: delivered }),
+          );
         } else {
-          toast.warn("没有在线设备", "内容已留在历史里，等设备上线后可重发。");
+          toast.warn(
+            t("common.noOnlineDevices"),
+            t("common.toast.noOnlineDevices.description"),
+          );
         }
       }),
       listenEvent("clipmesh://error", (message) => {
         statusStore.setError(message);
-        toast.error("出错了", message);
+        toast.error(t("common.toast.error.title"), message);
       }),
     ]);
 

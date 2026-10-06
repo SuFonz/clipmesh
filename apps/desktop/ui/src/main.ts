@@ -5,6 +5,7 @@ import { isMock } from "@clipmesh/ui-core";
 
 import App from "./App.vue";
 import { router } from "./router";
+import "./styles/layout.css";
 
 const app = createApp(App);
 

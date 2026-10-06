@@ -81,7 +81,7 @@ pub use provider::{
     ClipboardEvent, ClipboardProvider, IdentityProvider, ImageStore, NetworkEvent,
     NetworkProvider, PeerAddress, PeerSession,
 };
-pub use settings::{Settings, SettingsPatch};
+pub use settings::{Language, Settings, SettingsPatch};
 pub use sync::{
     ContentSignature, DedupCache, EchoSuppressor, History, PushOutcome, SyncPolicy,
     DEFAULT_DEDUP_CAPACITY, DEFAULT_ECHO_WINDOW, DEFAULT_HISTORY_CAPACITY,

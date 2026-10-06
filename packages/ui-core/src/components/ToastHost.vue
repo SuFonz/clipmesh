@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { useToast, type ToastTone } from "../composables/useToast";
 import AppIcon from "./AppIcon.vue";
 import type { IconName } from "./icons";
@@ -34,7 +35,12 @@ const TONE_ICONS: Record<ToastTone, IconName> = {
             <p class="title">{{ toast.title }}</p>
             <p v-if="toast.description" class="desc">{{ toast.description }}</p>
           </div>
-          <button class="close" type="button" aria-label="关闭" @click="dismiss(toast.id)">
+          <button
+            class="close"
+            type="button"
+            :aria-label="t('components.toast.close')"
+            @click="dismiss(toast.id)"
+          >
             <AppIcon name="close" :size="14" />
           </button>
         </div>
