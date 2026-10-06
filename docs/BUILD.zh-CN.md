@@ -171,8 +171,8 @@ Tauri 的模板里这两样都没有，所以重新生成的项目打出来的 r
 ### 4.4 运行与打包
 
 ```bash
-npm run dev:android    # = tauri android dev
-npm run build:android  # = tauri android build  ->  APK / AAB
+npm run dev:android              # = tauri android dev
+npm run build:android:release    # = tauri android build  ->  已签名的 APK / AAB
 ```
 
 ### 4.5 前端怎么和 Kotlin 说话

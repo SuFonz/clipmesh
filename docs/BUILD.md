@@ -170,8 +170,8 @@ Tauri's template ships neither, so a regenerated project produces unsigned relea
 ### 4.4 Running and packaging
 
 ```bash
-npm run dev:android    # = tauri android dev
-npm run build:android  # = tauri android build  ->  APK / AAB
+npm run dev:android              # = tauri android dev
+npm run build:android:release    # = tauri android build  ->  signed APK / AAB
 ```
 
 ### 4.5 How the frontend talks to Kotlin
