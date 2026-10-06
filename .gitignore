@@ -12,8 +12,8 @@ dist-ssr
 **/src-tauri/gen/schemas
 
 # Android build output. `gen/android` itself IS tracked: it is what
-# `tauri android init` produces and it carries the two hand-written wiring lines
-# described in docs/BUILD.md.
+# `tauri android init` produces and it carries the hand-written wiring described
+# in docs/BUILD.md §4.3.
 **/src-tauri/gen/android/.gradle
 **/src-tauri/gen/android/build
 **/src-tauri/gen/android/app/build
@@ -23,6 +23,31 @@ dist-ssr
 # Any Android library module under apps/*/plugins/ (currently just `bridge`).
 **/plugins/*/build
 **/plugins/*/.gradle
+
+# Kotlin 2.x drops compiler session files (and daemon logs) into `.kotlin/` next
+# to the build. They are regenerated on every compile and carry a random number
+# in the name, so without this every build dirties `git status`.
+**/.kotlin
+
+# ---------------------------------------------------------------------------
+# Secrets - a safety net, not a fix.
+#
+# Nothing here should ever exist in the working tree: the release signing config
+# reads its four values from the *global* `~/.gradle/gradle.properties` or the
+# environment (docs/BUILD.md §4.1), and the device identity is generated into the
+# per-user app config directory at first run. These patterns exist so that the
+# day someone drops a keystore into the repo by hand, git refuses it instead of
+# committing it.
+#
+# A committed signing key cannot be un-leaked by deleting it later: it would
+# still be in the history, and in every clone. If this ever fires, rotate the key
+# rather than rewriting history.
+# ---------------------------------------------------------------------------
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
 
 # Logs
 logs
@@ -36,9 +61,13 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

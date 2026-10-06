@@ -97,6 +97,11 @@ clipmesh/
 
 Rust 1.85+ · Node 20+ · （Android 另需 JDK 17+、Android SDK、NDK）
 
+> **实际构建过的是哪些。** **在 Windows 上**构建能同时产出可用的 Windows 程序和 Android APK，
+> 这是唯一验证过的组合。三个桌面平台都已接线（见 [`docs/BUILD.md`](docs/BUILD.md)，以及按平台
+> 区分的打包配置 `apps/desktop/src-tauri/tauri.*.conf.json`），平台相关的代码也只集中在
+> `crates/clipboard` —— 但 **Linux 和 macOS 的构建从未跑起来过**。**请当作未验证，而不是已知可用。**
+
 ### 桌面端
 
 ```bash

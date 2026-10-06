@@ -99,6 +99,13 @@ clipmesh/
 
 Rust 1.85+ · Node 20+ · (Android additionally needs JDK 17+, the Android SDK and the NDK)
 
+> **What has actually been built.** Building **on Windows** produces both a working Windows app and
+> a working Android APK, and that is the combination that has been verified. All three desktop
+> platforms are wired up (see [`docs/BUILD.md`](docs/BUILD.md) and the per-platform bundle configs
+> `apps/desktop/src-tauri/tauri.*.conf.json`), and the code that differs per platform is confined to
+> `crates/clipboard` — but **the Linux and macOS builds have never been run**. Treat those as
+> untested rather than as known working.
+
 ### Desktop
 
 ```bash
